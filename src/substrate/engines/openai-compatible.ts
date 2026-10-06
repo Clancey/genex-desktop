@@ -67,6 +67,10 @@ const MESSAGE = {
   NotConfigured: "no OpenAI-compatible endpoint is set up — add one in Settings → Local Models",
   NotAnsweringDetail: (baseUrl: string) => `no answer from ${baseUrl}`,
   NotAnsweringRemedy: "Check that the server is running and reachable from this Mac, then try again.",
+  NoRouteDetail: (baseUrl: string) => `this computer has no route to ${baseUrl}`,
+  NoRouteRemedy: "Check the address and that this computer is on the server's network, then try again.",
+  NoRouteMacRemedy:
+    "macOS may be blocking local network access: allow Genex (Electron when run from source) in System Settings → Privacy & Security → Local Network, then try again.",
   NotAnswering: (baseUrl: string) =>
     `the endpoint at ${baseUrl} is not answering — check that the server is running and reachable from this Mac`,
   KeyRefusedDetail: (baseUrl: string) => `${baseUrl} refused the API key`,
@@ -100,6 +104,46 @@ export interface OpenAICompatibleEngineOptions {
   timeoutMs?: number;
   /** Injected in tests to step past the listing cache. */
   now?: () => number;
+  /** Injected in tests to simulate network failures; defaults to the global fetch. */
+  fetch?: typeof fetch;
+  /** Injected in tests; decides whether a blocked route points at macOS Local Network privacy. */
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * Socket errors meaning the host could not be routed to at all. macOS Local Network privacy
+ * refuses a LAN connection from an app it has not allowed with exactly this.
+ */
+const NO_ROUTE_CODES: ReadonlySet<string> = new Set(["EHOSTUNREACH", "ENETUNREACH"]);
+
+/** How listing reaches the network, and on which platform. */
+interface ListingTransport {
+  fetch: typeof fetch;
+  platform: NodeJS.Platform;
+}
+
+/** The socket error code under a failed fetch, if it carries one. */
+function socketErrorCode(err: unknown): string | null {
+  const cause = (err as { cause?: unknown } | null)?.cause;
+  const code = (cause as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : null;
+}
+
+/** Why a fetch to the endpoint never got an answer. */
+function unreachableStatus(config: OpenAIEndpointConfig, err: unknown, platform: NodeJS.Platform): EngineStatus {
+  const code = socketErrorCode(err);
+  if (code === null || !NO_ROUTE_CODES.has(code)) {
+    return {
+      code: EngineStatusCode.NotRunning,
+      detail: MESSAGE.NotAnsweringDetail(config.baseUrl),
+      remedy: MESSAGE.NotAnsweringRemedy,
+    };
+  }
+  return {
+    code: EngineStatusCode.NotRunning,
+    detail: MESSAGE.NoRouteDetail(config.baseUrl),
+    remedy: platform === "darwin" ? MESSAGE.NoRouteMacRemedy : MESSAGE.NoRouteRemedy,
+  };
 }
 
 type Listing = { ok: true; models: EngineModel[] } | { ok: false; status: EngineStatus };
@@ -216,23 +260,16 @@ function failedListing(config: OpenAIEndpointConfig, status: number): Listing {
   };
 }
 
-async function listModels(config: OpenAIEndpointConfig): Promise<Listing> {
+async function listModels(config: OpenAIEndpointConfig, transport: ListingTransport): Promise<Listing> {
   let response: Response;
   try {
-    response = await fetch(`${config.baseUrl}/models`, {
+    response = await transport.fetch(`${config.baseUrl}/models`, {
       headers: { accept: "application/json", ...authHeaders(config) },
       signal: AbortSignal.timeout(MODEL_LIST_TIMEOUT_MS),
       redirect: "error",
     });
-  } catch {
-    return {
-      ok: false,
-      status: {
-        code: EngineStatusCode.NotRunning,
-        detail: MESSAGE.NotAnsweringDetail(config.baseUrl),
-        remedy: MESSAGE.NotAnsweringRemedy,
-      },
-    };
+  } catch (err) {
+    return { ok: false, status: unreachableStatus(config, err, transport.platform) };
   }
   if (!response.ok) {
     await response.body?.cancel();
@@ -252,11 +289,13 @@ export class OpenAICompatibleEngine implements Engine {
   readonly kind = EngineKind.Direct;
   readonly #timeoutMs: number;
   readonly #now: () => number;
+  readonly #transport: ListingTransport;
   #connection: Connection | null = null;
 
   constructor(options: OpenAICompatibleEngineOptions = {}) {
     this.#timeoutMs = options.timeoutMs ?? COMPLETION_TIMEOUT_MS;
     this.#now = options.now ?? Date.now;
+    this.#transport = { fetch: options.fetch ?? globalThis.fetch, platform: options.platform ?? process.platform };
     this.configure(options.endpoint ?? null);
   }
 
@@ -291,7 +330,7 @@ export class OpenAICompatibleEngine implements Engine {
     const now = this.#now();
     const cached = connection.listed;
     if (!fresh && cached && now - cached.at < MODEL_LIST_TTL_MS) return cached.listing;
-    const listing = listModels(connection.config);
+    const listing = listModels(connection.config, this.#transport);
     connection.listed = { at: now, listing };
     return listing;
   }

@@ -130,12 +130,12 @@ async function probeEndpoint(
   endpoint: OpenAIEndpointView,
 ): Promise<OpenAIEndpointSaveResult> {
   if (!endpoint.baseUrl || !core.engines.has(EngineId.OpenAICompatible)) {
-    return { endpoint, modelCount: null, error: null };
+    return { endpoint, modelCount: null, error: null, remedy: null };
   }
   const engine = core.engines.get(EngineId.OpenAICompatible);
   await engine.refreshModels?.(true);
   const status = await engine.status();
   const listed = status.code === EngineStatusCode.Ready || status.code === EngineStatusCode.NotInstalled;
-  if (!listed) return { endpoint, modelCount: null, error: status.detail };
-  return { endpoint, modelCount: (await engine.models()).length, error: null };
+  if (!listed) return { endpoint, modelCount: null, error: status.detail, remedy: status.remedy ?? null };
+  return { endpoint, modelCount: (await engine.models()).length, error: null, remedy: null };
 }

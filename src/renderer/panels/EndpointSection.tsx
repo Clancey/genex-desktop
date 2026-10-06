@@ -43,7 +43,8 @@ const INPUT_CLASS =
 /** What saving the endpoint last said: how many models it found, or why it could not list them. */
 function resultWords(result: OpenAIEndpointSaveResult | null): string | null {
   if (!result?.endpoint.baseUrl) return null;
-  return result.error ?? (result.modelCount === null ? null : WORDS.found(result.modelCount));
+  if (result.error) return [result.error, result.remedy].filter(Boolean).join(" — ");
+  return result.modelCount === null ? null : WORDS.found(result.modelCount);
 }
 
 /** The engine's own status line, when it is not simply ready. */

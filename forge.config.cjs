@@ -106,6 +106,8 @@ module.exports = {
       NSDesktopFolderUsageDescription: folderAccess("your Desktop"),
       NSDownloadsFolderUsageDescription: folderAccess("your Downloads folder"),
       NSRemovableVolumesUsageDescription: folderAccess("folders on an external drive"),
+      // An OpenAI-compatible model server is usually another computer on the LAN; macOS asks first.
+      NSLocalNetworkUsageDescription: "Genex connects to the model server you add in Settings → Local Models.",
     },
     // The Windows executable's version resource: what Explorer, Task Manager and UAC show.
     win32metadata: {

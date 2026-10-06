@@ -74,4 +74,6 @@ export interface OpenAIEndpointSaveResult {
   modelCount: number | null;
   /** Why the endpoint could not be listed; the endpoint is saved regardless. */
   error: string | null;
+  /** What the person can do about {@link error}, when there is something. */
+  remedy: string | null;
 }

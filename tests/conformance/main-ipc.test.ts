@@ -668,6 +668,7 @@ it("saving the endpoint validates it, keeps its key in main and lists the server
         endpoint: { baseUrl: `${server.host}/v1`, hasApiKey: true, canStoreApiKey: true },
         modelCount: 1,
         error: null,
+        remedy: null,
       },
     });
     const read = await invoke("studio:openai-endpoint.get");
@@ -675,9 +676,12 @@ it("saving the endpoint validates it, keeps its key in main and lists the server
 
     const refused = await invoke("studio:openai-endpoint.save", { baseUrl: server.host, apiKey: "sk-wrong" });
     assert.equal(refused.ok, true, "a refused key still saves the endpoint");
-    const probe = refused.ok ? (refused.value as { modelCount: number | null; error: string | null }) : null;
+    const probe = refused.ok
+      ? (refused.value as { modelCount: number | null; error: string | null; remedy: string | null })
+      : null;
     assert.equal(probe?.modelCount, null);
     assert.match(probe?.error ?? "", /refused the API key/);
+    assert.ok(probe?.remedy, "a failed listing says what to do next");
     assert.doesNotMatch(JSON.stringify(refused), /sk-wrong/);
   } finally {
     await server.close();

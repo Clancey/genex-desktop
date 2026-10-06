@@ -129,6 +129,25 @@ describe("openai-compatible endpoint discovery", () => {
     assert.match(status.detail ?? "", /127\.0\.0\.1/);
   });
 
+  it("names a host the Mac blocked (no route) apart from a server that is down", async () => {
+    const failing = (code: string) => async () => {
+      throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error(code), { code }) });
+    };
+    const statusFor = (code: string, platform: NodeJS.Platform) =>
+      new OpenAICompatibleEngine({
+        endpoint: { baseUrl: "http://192.168.1.5:4141/v1", apiKey: null },
+        fetch: failing(code),
+        platform,
+      }).status();
+    const refused = await statusFor("ECONNREFUSED", "darwin");
+    const blocked = await statusFor("EHOSTUNREACH", "darwin");
+    const blockedElsewhere = await statusFor("EHOSTUNREACH", "linux");
+    for (const status of [refused, blocked, blockedElsewhere]) assert.equal(status.code, EngineStatusCode.NotRunning);
+    assert.notEqual(blocked.detail, refused.detail, "an unreachable host is not described as a silent server");
+    assert.notEqual(blocked.remedy, refused.remedy);
+    assert.notEqual(blocked.remedy, blockedElsewhere.remedy, "only macOS points at its Local Network setting");
+  });
+
   it("forgets the old endpoint's models when pointed at another", async () => {
     const first = await fake({ openaiModels: [{ id: "first-model" }] });
     const second = await fake({ openaiModels: [{ id: "second-model" }] });
