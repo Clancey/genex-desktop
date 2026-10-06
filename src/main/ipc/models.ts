@@ -5,6 +5,7 @@ import { type ModelPullProgress, UiEvent } from "../../shared/ui-events.ts";
 import type { ProviderUsageReport } from "../../shared/provider-usage.ts";
 import { isBonsaiModelId } from "../../substrate/bonsai/manifest.ts";
 import { BonsaiEngine } from "../../substrate/engines/bonsai.ts";
+import { OpenAICompatibleEngine } from "../../substrate/engines/openai-compatible.ts";
 import { detectHardware, fitFor } from "../../substrate/hardware.ts";
 import { lookupOllamaModel } from "../../substrate/ollama-registry.ts";
 import { hardwareReport } from "../core/hardware-report.ts";
@@ -124,7 +125,11 @@ export function registerModelsIpc(handle: IpcHandle, { core, subscription, pushU
   });
 }
 
-/** Ask the just-saved endpoint for its `/models`, so Settings can say at once whether it answers. */
+/**
+ * Ask the just-saved endpoint for its `/models`, so Settings can say at once whether it answers.
+ * On macOS this first LAN connection is what raises the Local Network prompt; the engine waits for
+ * the answer so choosing Allow finishes this save.
+ */
 async function probeEndpoint(
   core: Pick<StudioCore, "engines">,
   endpoint: OpenAIEndpointView,
@@ -133,7 +138,8 @@ async function probeEndpoint(
     return { endpoint, modelCount: null, error: null, remedy: null };
   }
   const engine = core.engines.get(EngineId.OpenAICompatible);
-  await engine.refreshModels?.(true);
+  if (engine instanceof OpenAICompatibleEngine) await engine.refreshForSave();
+  else await engine.refreshModels?.(true);
   const status = await engine.status();
   const listed = status.code === EngineStatusCode.Ready || status.code === EngineStatusCode.NotInstalled;
   if (!listed) return { endpoint, modelCount: null, error: status.detail, remedy: status.remedy ?? null };

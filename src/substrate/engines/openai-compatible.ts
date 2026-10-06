@@ -10,7 +10,8 @@
 import { EngineId } from "../../shared/providers.ts";
 import { EngineKind, EngineStatusCode } from "../../shared/engine-descriptor.ts";
 import { EngineFailureKind } from "../../shared/engine-requests.ts";
-import { HOUR_MS, SECOND_MS } from "../../shared/duration.ts";
+import { HOUR_MS, MINUTE_MS, SECOND_MS } from "../../shared/duration.ts";
+import { setTimeout as sleepFor } from "node:timers/promises";
 import { isJsonObject } from "../fsx.ts";
 import { type CompletionsModel, OpenAICompletions, isCutConnection } from "./openai-completions.ts";
 import {
@@ -28,6 +29,13 @@ import {
 const MODEL_LIST_TTL_MS = 15 * SECOND_MS;
 /** How long the endpoint has to answer `/models` before it counts as not answering. */
 const MODEL_LIST_TIMEOUT_MS = 10 * SECOND_MS;
+/**
+ * How long a save waits for the person to answer macOS's Local Network prompt. Until they do,
+ * every LAN connection fails at once with no route, so re-asking is cheap.
+ */
+const LOCAL_NETWORK_PROMPT_WAIT_MS = MINUTE_MS;
+/** How often a save re-asks while that prompt is open. */
+const LOCAL_NETWORK_RETRY_MS = 2 * SECOND_MS;
 /** Ceiling on one completion; remote local models can be slow, but a dead stream must end. */
 const COMPLETION_TIMEOUT_MS = HOUR_MS;
 /** The planning budget for a model whose server does not report its context. */
@@ -70,7 +78,7 @@ const MESSAGE = {
   NoRouteDetail: (baseUrl: string) => `this computer has no route to ${baseUrl}`,
   NoRouteRemedy: "Check the address and that this computer is on the server's network, then try again.",
   NoRouteMacRemedy:
-    "macOS may be blocking local network access: allow Genex (Electron when run from source) in System Settings → Privacy & Security → Local Network, then try again.",
+    "macOS may be blocking local network access. Choose Allow when macOS asks to let Genex find devices on local networks (the prompt can open behind other windows), then save again. If you chose Don't Allow, turn on Genex (Electron when run from source) in System Settings → Privacy & Security → Local Network.",
   NotAnswering: (baseUrl: string) =>
     `the endpoint at ${baseUrl} is not answering — check that the server is running and reachable from this Mac`,
   KeyRefusedDetail: (baseUrl: string) => `${baseUrl} refused the API key`,
@@ -108,6 +116,8 @@ export interface OpenAICompatibleEngineOptions {
   fetch?: typeof fetch;
   /** Injected in tests; decides whether a blocked route points at macOS Local Network privacy. */
   platform?: NodeJS.Platform;
+  /** Injected in tests so waiting out the Local Network prompt takes no time. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -129,10 +139,15 @@ function socketErrorCode(err: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
+/** Whether a failed fetch never found a route to the host. */
+function isNoRoute(err: unknown): boolean {
+  const code = socketErrorCode(err);
+  return code !== null && NO_ROUTE_CODES.has(code);
+}
+
 /** Why a fetch to the endpoint never got an answer. */
 function unreachableStatus(config: OpenAIEndpointConfig, err: unknown, platform: NodeJS.Platform): EngineStatus {
-  const code = socketErrorCode(err);
-  if (code === null || !NO_ROUTE_CODES.has(code)) {
+  if (!isNoRoute(err)) {
     return {
       code: EngineStatusCode.NotRunning,
       detail: MESSAGE.NotAnsweringDetail(config.baseUrl),
@@ -146,7 +161,12 @@ function unreachableStatus(config: OpenAIEndpointConfig, err: unknown, platform:
   };
 }
 
-type Listing = { ok: true; models: EngineModel[] } | { ok: false; status: EngineStatus };
+type Listing = { ok: true; models: EngineModel[] } | { ok: false; status: EngineStatus; localNetworkBlocked?: boolean };
+
+/** Whether macOS may still be holding this listing behind its Local Network prompt. */
+function awaitingLocalNetwork(listing: Listing): boolean {
+  return !listing.ok && listing.localNetworkBlocked === true;
+}
 
 interface Connection {
   config: OpenAIEndpointConfig;
@@ -269,7 +289,8 @@ async function listModels(config: OpenAIEndpointConfig, transport: ListingTransp
       redirect: "error",
     });
   } catch (err) {
-    return { ok: false, status: unreachableStatus(config, err, transport.platform) };
+    const localNetworkBlocked = transport.platform === "darwin" && isNoRoute(err);
+    return { ok: false, status: unreachableStatus(config, err, transport.platform), localNetworkBlocked };
   }
   if (!response.ok) {
     await response.body?.cancel();
@@ -290,12 +311,14 @@ export class OpenAICompatibleEngine implements Engine {
   readonly #timeoutMs: number;
   readonly #now: () => number;
   readonly #transport: ListingTransport;
+  readonly #sleep: (ms: number) => Promise<void>;
   #connection: Connection | null = null;
 
   constructor(options: OpenAICompatibleEngineOptions = {}) {
     this.#timeoutMs = options.timeoutMs ?? COMPLETION_TIMEOUT_MS;
     this.#now = options.now ?? Date.now;
     this.#transport = { fetch: options.fetch ?? globalThis.fetch, platform: options.platform ?? process.platform };
+    this.#sleep = options.sleep ?? ((ms) => sleepFor(ms));
     this.configure(options.endpoint ?? null);
   }
 
@@ -338,6 +361,21 @@ export class OpenAICompatibleEngine implements Engine {
   /** Ask the endpoint again now, bypassing the listing cache (after saving it in Settings). */
   async refreshModels(): Promise<void> {
     if (this.#connection) await this.#listing(this.#connection, true);
+  }
+
+  /**
+   * Ask again after a save. On macOS the first LAN connection raises the Local Network prompt and
+   * fails while it is open, so keep re-asking until the person answers or the wait runs out.
+   */
+  async refreshForSave(): Promise<void> {
+    const connection = this.#connection;
+    if (!connection) return;
+    let listing = await this.#listing(connection, true);
+    for (let waited = 0; waited < LOCAL_NETWORK_PROMPT_WAIT_MS; waited += LOCAL_NETWORK_RETRY_MS) {
+      if (!awaitingLocalNetwork(listing) || this.#connection !== connection) return;
+      await this.#sleep(LOCAL_NETWORK_RETRY_MS);
+      listing = await this.#listing(connection, true);
+    }
   }
 
   async status(): Promise<EngineStatus> {

@@ -44,9 +44,12 @@ key is saved. Removing the server deletes both.
 
 Saving lists `GET {address}/models` at once and says how many models it found or why it could not
 (no answer, key refused, HTTP status). A host with no route (`EHOSTUNREACH`/`ENETUNREACH`) is
-named apart from a silent server; on macOS that is usually Local Network privacy, so the remedy
-points at System Settings → Privacy & Security → Local Network (the packaged app declares
-`NSLocalNetworkUsageDescription`; a source run is listed as Electron). The listing is cached for 15 seconds, times out after 10,
+named apart from a silent server. On macOS that is usually Local Network privacy: the first LAN
+connection raises the system prompt (which can open behind other windows), and the app is not
+listed in System Settings → Privacy & Security → Local Network until it is answered. So a save
+re-asks every 2 seconds for up to a minute while the card asks for Allow; the remedy covers a
+Don't Allow (the packaged app declares `NSLocalNetworkUsageDescription`; a source run is listed
+as Electron). The listing is cached for 15 seconds, times out after 10,
 refuses redirects and sends `Authorization: Bearer` only when a key is saved. Embedding and
 reranker entries are skipped. Each listed model gets the first context length the server reports
 (`loaded_context_length`, `context_length`, `max_model_len`, `context_window`, llama.cpp's

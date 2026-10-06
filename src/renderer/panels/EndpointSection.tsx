@@ -23,6 +23,7 @@ const WORDS = {
   clearKey: "Remove key",
   save: "Save",
   saving: "Saving…",
+  checking: "Checking the server… If your computer asks to let Genex find devices on local networks, choose Allow.",
   remove: "Remove server",
   locked: "Keychain is unavailable, so an API key can't be saved. Servers without a key still work.",
   found: (count: number) => (count === 1 ? "Found 1 model." : `Found ${count} models.`),
@@ -51,6 +52,17 @@ function resultWords(result: OpenAIEndpointSaveResult | null): string | null {
 function statusWords(engine: EngineDescriptor | undefined): string | null {
   if (!engine || engine.status.code === EngineStatusCode.Ready) return null;
   return [engine.status.detail, engine.status.remedy].filter(Boolean).join(" — ");
+}
+
+/** The card's one line: a hint while saving, else the save's outcome, else the engine's status. */
+function cardMessage(
+  busy: boolean,
+  failure: string | null,
+  result: OpenAIEndpointSaveResult | null,
+  engine: EngineDescriptor | undefined,
+): string | null {
+  if (busy) return WORDS.checking;
+  return failure ?? resultWords(result) ?? statusWords(engine);
 }
 
 /** The models the saved endpoint serves, as the picker will list them. */
@@ -130,7 +142,7 @@ export function EndpointSection({
     void save({ baseUrl: parsed.baseUrl, ...(apiKey ? { apiKey } : {}) });
   };
 
-  const message = failure ?? resultWords(result) ?? statusWords(saved?.baseUrl ? engine : undefined);
+  const message = cardMessage(busy, failure, result, saved?.baseUrl ? engine : undefined);
   return (
     <form onSubmit={submit} data-openai-endpoint className="flex flex-col gap-2 pt-6">
       <span className="text-sm font-medium text-ink">{WORDS.title}</span>

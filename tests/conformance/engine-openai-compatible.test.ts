@@ -148,6 +148,60 @@ describe("openai-compatible endpoint discovery", () => {
     assert.notEqual(blocked.remedy, blockedElsewhere.remedy, "only macOS points at its Local Network setting");
   });
 
+  it("a save on macOS keeps asking while the Local Network prompt is open, and lists once it is allowed", async () => {
+    const noRoute = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("EHOSTUNREACH"), { code: "EHOSTUNREACH" }),
+    });
+    let calls = 0;
+    const naps: number[] = [];
+    const engine = new OpenAICompatibleEngine({
+      endpoint: { baseUrl: "http://192.168.1.5:4141/v1", apiKey: null },
+      platform: "darwin",
+      sleep: async (ms) => {
+        naps.push(ms);
+      },
+      fetch: async () => {
+        calls += 1;
+        if (calls < 4) throw noRoute;
+        return Response.json({ object: "list", data: [{ id: "lan-coder", object: "model" }] });
+      },
+    });
+    await engine.refreshForSave();
+    assert.equal(calls, 4, "re-listed until macOS let the connection through");
+    assert.equal(naps.length, 3);
+    assert.equal((await engine.status()).code, EngineStatusCode.Ready);
+    assert.deepEqual(
+      (await engine.models()).map((m) => m.id),
+      ["lan-coder"],
+    );
+  });
+
+  it("gives up waiting for Local Network access, and never waits off macOS or for other failures", async () => {
+    const failing = (code: string) => async () => {
+      throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error(code), { code }) });
+    };
+    const attempts = async (code: string, platform: NodeJS.Platform) => {
+      let calls = 0;
+      const fetchFails = failing(code);
+      const engine = new OpenAICompatibleEngine({
+        endpoint: { baseUrl: "http://192.168.1.5:4141/v1", apiKey: null },
+        platform,
+        sleep: async () => {},
+        fetch: async () => {
+          calls += 1;
+          return fetchFails();
+        },
+      });
+      await engine.refreshForSave();
+      return { calls, status: await engine.status() };
+    };
+    const blocked = await attempts("EHOSTUNREACH", "darwin");
+    assert.ok(blocked.calls > 1 && blocked.calls < 100, `bounded retries, got ${blocked.calls}`);
+    assert.equal(blocked.status.code, EngineStatusCode.NotRunning);
+    assert.equal((await attempts("EHOSTUNREACH", "linux")).calls, 1);
+    assert.equal((await attempts("ECONNREFUSED", "darwin")).calls, 1);
+  });
+
   it("forgets the old endpoint's models when pointed at another", async () => {
     const first = await fake({ openaiModels: [{ id: "first-model" }] });
     const second = await fake({ openaiModels: [{ id: "second-model" }] });
