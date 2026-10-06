@@ -35,6 +35,7 @@ Genex is early: expect rough edges, and tell us about them in
 → Or run local models\
 → Multi-agent game dev: mix Opus and GPT models across the main agent, workers and reviewers\
 → Make 3D assets locally with the Blender plugin\
+→ Check and export Godot 4 games to the web with the Godot plugin\
 → Meshy, Tripo, ElevenLabs and more through the Genex tools router\
 → Export anywhere, or publish to the web\
 → Unity and Unreal plugins soon\

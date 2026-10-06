@@ -694,16 +694,29 @@ Local Blender (`src/plugins/blender`) is the public SDK example for installed na
 Core owns only generic runtime discovery, pinned installation, process execution, cancellation,
 project-bound inputs and asset delivery. Blender-specific bpy wrapping, model export and renders
 live inside its plugin. No private core Blender hook is part of an agent's tool list.
+Local Godot (`src/plugins/godot`, bundled disabled) checks a Godot 4.7.2 project in the game
+folder and exports it to web through the same services; its `wrapper.gd` owns the Godot steps.
 
 A manifest declares fixed `nativeRuntimes` candidates and version probes. An optional installer
 requires an exact HTTPS URL, bytes, SHA-256, archive shape, executable and license notices, plus a
 matching confirmed user action. `runtime.detect` is read-only; `runtime.installation` hydrates a
 durable installation job; `runtime.install` and `runtime.cancelInstall` are user-action services.
-An agent cannot choose a binary, download URL or installation action.
+An agent cannot choose a binary, download URL or installation action. Archives are `dmg`,
+`tar.gz` or `zip` (a `.app` entry is copied whole, keeping its relative links). `nativeDownloads`
+pins extra data the same way (a Godot export-template `.tpz` is a zip): only the listed members
+are unpacked, under `runtime.detect`/`install`/`cancelInstall`/`installation` with
+`{download: id}`, and a job binds the read-only folder with `{source: "download"}`.
 
 `nativeJobs` declares fixed argument arrays with package/input/output/value bindings, validated
 value patterns, input/output names, deadline, byte limits and optional GPU access. `native.run`
-stages only declared project input files; the child receives no full-project read grant.
+stages only declared project input files; the child receives no full-project read grant. A job
+with a `project` rule (needs `project.read`) may bind `{source: "project", name: "."}`: a writable
+copy of the game, within `maxFiles`/`maxBytes`, without links, `.git`, `.godot`, `.env*`, private
+paths or `exclude`, that is never written back. Folders of nested declared outputs (`web/index.html`)
+exist before the job starts. `osTempFiles` names at most four files a runtime writes straight into
+the user's OS temp folder, ignoring TMPDIR (Godot's export saves `tmpproject.binary` to
+`NSTemporaryDirectory()`); the profile grants only each file and its `<name>-XXXXXX` safe-save
+sibling, and jobs naming the same file run one at a time.
 `timeoutMs` is 1,000–300,000 milliseconds. `maxOutputBytes` retains the last 1–256,000 bytes
 of each process log stream; it does not limit asset files. `maxAssetBytes` limits the combined
 declared generated files to 1–104,857,600 bytes. Delivery additionally enforces `assetLimits`.

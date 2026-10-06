@@ -1,0 +1,59 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+body{font:14px system-ui;padding:16px;color:var(--studio-fg,#ddd);background:var(--studio-bg,#222)}
+button{padding:8px 12px;background:#ffffff12;color:inherit;border:1px solid #ffffff30;border-radius:8px;cursor:pointer}
+button:hover{background:#ffffff24}button:disabled{opacity:.5;cursor:default}button:focus-visible{outline:2px solid #999}
+pre{white-space:pre-wrap;overflow-wrap:anywhere}#jobs{display:grid;gap:8px}#path{overflow-wrap:anywhere}progress{width:100%}
+</style></head><body>
+<h2>Local Godot</h2>
+<p>Check and export Godot 4 projects on this Mac. No Genex account or credits are used. Enabling this plugin makes its tools available in this chat’s next response.</p>
+<h3>Editor</h3>
+<p id="status" role="status">Checking runtime…</p><p id="path"></p>
+<button id="recheck">Recheck</button> <button id="install" hidden>Download Godot 4.7.2</button> <button id="cancel" hidden>Cancel download</button>
+<p id="installation" role="status"></p><progress id="progress" hidden></progress>
+<h3>Web export templates</h3>
+<p id="templates" role="status">Checking templates…</p>
+<button id="install-templates" hidden>Download web templates</button> <button id="cancel-templates" hidden>Cancel download</button>
+<p id="templates-installation" role="status"></p><progress id="templates-progress" hidden></progress>
+<pre id="error" role="alert"></pre><div id="jobs"></div>
+<!-- STUDIO_PANEL_SDK -->
+<script>
+const api=window.studioPlugin,$=id=>document.getElementById(id);
+let busy=false,refreshing=false,last='',closed=false;
+function progress(job,cancel,line,bar){
+  $(cancel).hidden=!job?.active;$(bar).hidden=!job?.active;
+  if(!job)return;
+  $(line).textContent=`Download: ${job.phase} · ${Math.round(job.completed/1048576)} / ${Math.round(job.total/1048576)} MiB${job.error?' · '+job.error:''}`;
+  $(bar).max=job.total;$(bar).value=job.completed;
+}
+async function refresh(){
+  if(refreshing||closed)return;refreshing=true;
+  try{
+    const s=await api.call('action','status',{});if(closed)return;
+    $('status').textContent=s.runtime.detail;$('path').textContent=s.runtime.path||'';
+    $('install').hidden=s.runtime.state==='ready';$('install').disabled=busy||!!s.installation?.active;
+    progress(s.installation,'cancel','installation','progress');
+    $('templates').textContent=s.templates.detail;
+    $('install-templates').hidden=s.templates.state==='ready';$('install-templates').disabled=busy||!!s.templatesInstallation?.active;
+    progress(s.templatesInstallation,'cancel-templates','templates-installation','templates-progress');
+    const key=JSON.stringify(s.jobs);
+    if(key!==last){last=key;$('jobs').replaceChildren(...s.jobs.slice(-10).reverse().map(j=>{const p=document.createElement('p');p.textContent=j.state+' · '+j.id+(j.reason?' · '+j.reason:'');return p;}));}
+  }catch(e){if(!closed)$('error').textContent=String(e);}finally{refreshing=false;}
+}
+function installer(button,action){
+  $(button).onclick=async()=>{
+    if(busy)return;busy=true;$(button).disabled=true;$('error').textContent='';
+    try{await api.call('action',action,{}, {timeoutMs:1800000});}
+    catch(e){if(!closed)$('error').textContent=String(e);}
+    finally{busy=false;if(!closed){$(button).disabled=false;void refresh();}}
+  };
+}
+function canceller(button,action){
+  $(button).onclick=async()=>{try{await api.call('action',action,{});await refresh();}catch(e){$('error').textContent=String(e);}};
+}
+$('recheck').onclick=()=>{$('error').textContent='';void refresh();};
+installer('install','install');installer('install-templates','install-templates');
+canceller('cancel','cancel-install');canceller('cancel-templates','cancel-templates');
+void api.call('context').then(c=>{document.body.style.setProperty('--studio-bg',c.theme.background);document.body.style.setProperty('--studio-fg',c.theme.foreground);});
+void refresh();const timer=setInterval(refresh,2000);window.addEventListener('pagehide',()=>{closed=true;clearInterval(timer);});
+</script></body></html>

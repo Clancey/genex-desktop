@@ -750,7 +750,8 @@ export class StudioCore {
       const shape = await readProjectShape(binding.directory);
       return shape.build ? path.join(binding.directory, "public") : binding.directory;
     };
-    this.plugins.seedEnabled = { blender: this.#settings.blender };
+    // Godot ships off: its tools and skill only help a Godot project, so the user turns it on.
+    this.plugins.seedEnabled = { blender: this.#settings.blender, godot: false };
     this.plugins.onChange = (c) => {
       this.emit(UiEvent.PluginsChanged, c);
       this.#connections.changed();

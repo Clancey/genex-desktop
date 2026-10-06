@@ -15,7 +15,7 @@ import { PLUGIN_ID } from "../src/shared/plugin-id.ts";
 import { inlinePanelSdk } from "../src/plugin-sdk/inline-panel-sdk.mjs";
 
 /** Studio's own package names; a scaffold may not shadow them. */
-const RESERVED = new Set(["genex", "blender", "example", "studio"]);
+const RESERVED = new Set(["genex", "blender", "godot", "example", "studio"]);
 /** Text files the substitution runs over; anything else is copied byte for byte. */
 const TEXT = new Set([".json", ".mjs", ".js", ".cjs", ".ts", ".html", ".css", ".md"]);
 

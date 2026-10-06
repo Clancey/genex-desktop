@@ -1564,7 +1564,9 @@ export class PluginRegistry {
     if (!p.manifest.actions.some((a) => a.name === name)) throw new Error(MESSAGE.UnknownAction);
     const account = accountActionsOf(p.manifest);
     await this.#beforeAccountAction(id, p, name, account);
-    const installsRuntime = p.manifest.nativeRuntimes?.some((r) => r.install?.action === name);
+    const installsRuntime =
+      p.manifest.nativeRuntimes?.some((r) => r.install?.action === name) ||
+      p.manifest.nativeDownloads?.some((d) => d.action === name);
     try {
       const answer = await this.#process(id).call(
         "action",

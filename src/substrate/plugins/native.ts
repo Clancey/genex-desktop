@@ -6,7 +6,6 @@ import {
   mkdir,
   open,
   readFile,
-  readlink,
   realpath,
   readdir,
   rename,
@@ -25,6 +24,7 @@ import {
   PluginService,
   type PluginManifest,
   type PluginBinding,
+  type PluginNativeDownload,
   type PluginNativeJob,
   type PluginNativeRuntime,
   type PluginNativeStatus,
@@ -33,12 +33,14 @@ import {
 } from "../../shared/plugins.ts";
 import { InstallPhase } from "../../shared/model-install.ts";
 import { MINUTE_MS, SECOND_MS } from "../../shared/duration.ts";
-import { assertRelativePath, containedReal, isInside } from "../paths.ts";
+import { assertRelativePath, containedReal } from "../paths.ts";
 import { download, DownloadStatus } from "../bonsai/download.ts";
 import { atomicWriteJson, openNoFollow } from "../fsx.ts";
 import { NativeEndReason, runNativeProcess, runtimeRoot } from "./native-process.ts";
 import { credentialHomes } from "../credential-homes.ts";
 import { errorMessage } from "../../shared/errors.ts";
+import { assertLinksInside, extractZip, extractZipMembers, isUnsafeArchiveEntry } from "./native-archive.ts";
+import { copyProjectSnapshot, isProtectedInputSegment } from "./native-snapshot.ts";
 
 const exec = promisify(execFile);
 const VERSION_PROBE_TIMEOUT_MS = 8 * SECOND_MS;
@@ -55,10 +57,6 @@ const SEMVER = /^\d+\.\d+\.\d+$/;
 const PROBE_ENV = { PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" };
 /** Candidate path prefixes a runtime declaration may start with, and the folder each stands for. */
 const CANDIDATE_ROOTS = ["home:", "studio:", "storage:"] as const;
-/** Input path segments a job may never be handed: dotfiles, dependencies, agent instructions and key material. */
-const PROTECTED_INPUT_SEGMENTS = ["node_modules", "AGENTS.md", "CLAUDE.md"];
-const SECRET_NAME = /^(credentials|secrets|id_rsa|id_ed25519)(\.|$)/i;
-const KEY_FILE = /\.(pem|key|p12|pfx|keystore)$/i;
 /** Install phases after which nothing is running any more. */
 const FINISHED_INSTALL_PHASES = new Set<string>([
   InstallPhase.Ready,
@@ -75,7 +73,6 @@ const MESSAGE = {
   OutputNotRegular: "Job output is not a regular file",
   OutputHardLinked: "Job output is hard-linked to another file",
   OutputChanged: "Job output changed while it was being delivered",
-  LinkOutside: (link: string) => `Runtime link ${link} leads outside the runtime`,
   UnsupportedVersion: "The runtime did not report a supported version.",
   TooOld: (label: string, version: string, minimum: string) => `${label} ${version}; requires ${minimum} or newer.`,
   Found: (label: string, version: string) => `${label} ${version} found`,
@@ -103,6 +100,9 @@ const MESSAGE = {
   AppleSiliconOnly: "This pinned runtime supports macOS Apple Silicon only",
   NoSpace: "Not enough space for the pinned runtime and staging copy",
   UnsafeArchive: "Unsafe runtime archive",
+  UndeclaredDownload: "Undeclared download",
+  DownloadMissing: (label: string) => `${label} is not installed. Download it from plugin setup.`,
+  DownloadReady: (label: string) => `${label} installed`,
 } as const;
 
 /** Whether `version` is at least `minimum`, comparing major, minor and patch. */
@@ -116,13 +116,6 @@ const versionAtLeast = (version: string, minimum: string) => {
 };
 const isMissing = (e: unknown) => (e as NodeJS.ErrnoException).code === "ENOENT";
 const isAppleSilicon = () => process.platform === "darwin" && process.arch === "arm64";
-const isUnsafeArchiveEntry = (name: string) => name.startsWith("/") || name.split("/").includes("..");
-/** A path segment a native job must never see: a dotfile, dependencies, an agent file or key material. */
-const isProtectedInputSegment = (segment: string) =>
-  segment.startsWith(".") ||
-  PROTECTED_INPUT_SEGMENTS.includes(segment) ||
-  SECRET_NAME.test(segment) ||
-  KEY_FILE.test(segment);
 
 /** The state a finished native process leaves its job in. */
 function jobStateFor(result: { code: number | null; reason: string }): NativeJobState {
@@ -168,17 +161,7 @@ export async function copyDeclaredOutput(outputDir: string, file: string, dest: 
  */
 export async function copyRuntimeTree(source: string, destination: string): Promise<void> {
   await cp(source, destination, { recursive: true, verbatimSymlinks: true });
-  const walk = async (dir: string): Promise<void> => {
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isSymbolicLink()) {
-        const target = await readlink(full);
-        if (path.isAbsolute(target) || !isInside(destination, path.resolve(dir, target)))
-          throw new Error(MESSAGE.LinkOutside(path.relative(destination, full)));
-      } else if (entry.isDirectory()) await walk(full);
-    }
-  };
-  if ((await lstat(destination)).isDirectory()) await walk(destination);
+  await assertLinksInside(destination);
 }
 export interface NativeInvocation {
   method: string;
@@ -194,6 +177,18 @@ interface JobDirs {
   output: string;
   scratch: string;
   inputDir: string;
+  /** The job's writable game copy, when its recipe declares one. */
+  project?: string;
+}
+
+/** What a recipe's bound arguments resolve to for one job. */
+interface JobBindings {
+  directory: string;
+  inputs: Record<string, string>;
+  output: string;
+  values: Record<string, string>;
+  project?: string;
+  downloads: Record<string, string>;
 }
 
 /** Only declared inputs and values, as objects. */
@@ -264,24 +259,27 @@ async function stageInput(source: string, relative: string, staged: string, bind
   return hash.digest("hex");
 }
 
-/** The runtime's argv: literal arguments, package files, staged inputs, output paths and checked values. */
-async function jobArgv(
-  recipe: PluginNativeJob,
-  directory: string,
-  inputs: Record<string, string>,
-  output: string,
-  values: Record<string, string>,
-): Promise<string[]> {
+/**
+ * The runtime's argv: literal arguments, package files, staged inputs, output paths, checked
+ * values, the project snapshot and installed downloads.
+ */
+async function jobArgv(recipe: PluginNativeJob, b: JobBindings): Promise<string[]> {
   const argv: string[] = [];
   for (const arg of recipe.args) {
     if (typeof arg === "string") argv.push(arg);
-    else if (arg.source === "package") argv.push(await containedReal(directory, arg.name));
-    else if (arg.source === "input") argv.push(inputs[arg.name]);
-    else if (arg.source === "output") argv.push(path.join(output, arg.name));
-    else argv.push(values[arg.name]);
+    else if (arg.source === "package") argv.push(await containedReal(b.directory, arg.name));
+    else if (arg.source === "input") argv.push(b.inputs[arg.name]);
+    else if (arg.source === "output") argv.push(path.join(b.output, arg.name));
+    else if (arg.source === "project") argv.push(b.project ?? "");
+    else if (arg.source === "download") argv.push(b.downloads[arg.name]);
+    else argv.push(b.values[arg.name]);
   }
   return argv;
 }
+
+/** The downloads a recipe binds, by id. */
+const boundDownloads = (recipe: PluginNativeJob) =>
+  recipe.args.flatMap((a) => (typeof a !== "string" && a.source === "download" ? [a.name] : []));
 
 /** Record which declared outputs exist as regular files, refusing a total past the declared limit. */
 async function collectOutputs(recipe: PluginNativeJob, output: string, record: PluginNativeResult): Promise<void> {
@@ -317,11 +315,11 @@ async function deliverOutputs(jobDir: string, output: string, record: PluginNati
  * One runtime install's progress record: every change is emitted and written in order. `flush`
  * waits for the writes and fails when one failed; `settle` only waits.
  */
-function installRecorder(runtime: PluginNativeRuntime, total: number, jobFile: string, emit: Emit) {
+function installRecorder(id: string, total: number, jobFile: string, emit: Emit) {
   let update = Promise.resolve();
   let writeFailure: unknown;
   let record: PluginRuntimeInstall = {
-    runtime: runtime.id,
+    runtime: id,
     phase: InstallPhase.Preflight,
     completed: 0,
     total,
@@ -415,6 +413,42 @@ async function extractTarball(archive: string, stage: string, signal: AbortSigna
   await exec("/usr/bin/tar", ["-xzf", archive, "-C", stage], { signal, timeout: TAR_EXTRACT_TIMEOUT_MS });
 }
 
+/** Only the user's confirmed setup action that a declaration names may install or replace it. */
+function isTrustedAction(manifest: PluginManifest, invocation: NativeInvocation, action: string): boolean {
+  if (invocation.method !== "action" || invocation.name !== action) return false;
+  return manifest.actions.some((a) => a.name === action && a.confirmation);
+}
+
+/** Where a pinned download's members live once installed. */
+const downloadDir = (root: string, id: string) => path.join(root, "downloads", id);
+
+/** Ready when every declared member is a regular file in the download folder. */
+async function downloadStatus(item: PluginNativeDownload, root: string): Promise<PluginNativeStatus> {
+  const dir = downloadDir(root, item.id);
+  for (const member of item.members) {
+    const info = await lstat(path.join(dir, member)).catch(() => null);
+    if (!info?.isFile()) return { state: NativeRuntimeState.Missing, detail: MESSAGE.DownloadMissing(item.label) };
+  }
+  return { state: NativeRuntimeState.Ready, path: dir, detail: MESSAGE.DownloadReady(item.label) };
+}
+
+/** The folder of each download a recipe binds; refused while any is not installed. */
+async function readyDownloads(
+  manifest: PluginManifest,
+  recipe: PluginNativeJob,
+  root: string,
+): Promise<Record<string, string>> {
+  const folders: Record<string, string> = {};
+  for (const id of boundDownloads(recipe)) {
+    const item = manifest.nativeDownloads?.find((d) => d.id === id);
+    if (!item) throw new Error(MESSAGE.UndeclaredDownload);
+    const status = await downloadStatus(item, root);
+    if (status.state !== NativeRuntimeState.Ready || !status.path) throw new Error(status.detail);
+    folders[id] = status.path;
+  }
+  return folders;
+}
+
 /** Reusable host-owned runtime and job service. Plugin code remains trusted executable code;
  * only declared managed jobs get this filesystem/network confinement. */
 export class PluginNativeServices {
@@ -504,48 +538,68 @@ export class PluginNativeServices {
     invocation: NativeInvocation,
     emit: Emit,
   ): Promise<unknown> {
+    if (args?.download !== undefined) return this.#downloadCall(manifest, root, method, args, invocation, emit);
     const runtime = manifest.nativeRuntimes?.find((r) => r.id === args?.runtime);
     if (!runtime) throw new Error(MESSAGE.UndeclaredRuntime);
     if (method === PluginService.RuntimeDetect) return this.detect(runtime, root);
     const key = path.join(root, runtime.id);
-    if (method === PluginService.RuntimeInstallation) return this.#installation(root, runtime, key);
-    if (method === PluginService.RuntimeCancelInstall) {
-      if (invocation.method !== "action") throw new Error(MESSAGE.CancelNeedsAction);
-      this.#installControllers.get(key)?.abort();
-      return true;
-    }
+    if (method === PluginService.RuntimeInstallation) return this.#installation(root, runtime.id, key);
+    if (method === PluginService.RuntimeCancelInstall) return this.#cancelInstall(key, invocation);
     if (method !== PluginService.RuntimeInstall) throw new Error(MESSAGE.UnknownRuntimeOperation);
     const install = runtime.install;
-    if (!install) throw new Error(MESSAGE.InstallNeedsAction);
-    const trusted =
-      invocation.method === "action" &&
-      invocation.name === install.action &&
-      manifest.actions.some((a) => a.name === install.action && a.confirmation);
-    if (!trusted) throw new Error(MESSAGE.InstallNeedsAction);
+    if (!install || !isTrustedAction(manifest, invocation, install.action)) throw new Error(MESSAGE.InstallNeedsAction);
+    return this.#startInstall(key, invocation, (signal) => this.#install(runtime, install, root, signal, emit));
+  }
+  /** The `runtime.*` services for a declared pinned download (`{ download }` instead of `{ runtime }`). */
+  async #downloadCall(
+    manifest: PluginManifest,
+    root: string,
+    method: string,
+    args: any,
+    invocation: NativeInvocation,
+    emit: Emit,
+  ): Promise<unknown> {
+    const item = manifest.nativeDownloads?.find((d) => d.id === args.download);
+    if (!item) throw new Error(MESSAGE.UndeclaredDownload);
+    if (method === PluginService.RuntimeDetect) return downloadStatus(item, root);
+    const key = path.join(root, item.id);
+    if (method === PluginService.RuntimeInstallation) return this.#installation(root, item.id, key);
+    if (method === PluginService.RuntimeCancelInstall) return this.#cancelInstall(key, invocation);
+    if (method !== PluginService.RuntimeInstall) throw new Error(MESSAGE.UnknownRuntimeOperation);
+    if (!isTrustedAction(manifest, invocation, item.action)) throw new Error(MESSAGE.InstallNeedsAction);
+    return this.#startInstall(key, invocation, (signal) => this.#installDownload(item, root, signal, emit));
+  }
+  #cancelInstall(key: string, invocation: NativeInvocation): true {
+    if (invocation.method !== "action") throw new Error(MESSAGE.CancelNeedsAction);
+    this.#installControllers.get(key)?.abort();
+    return true;
+  }
+  /** Start one install per key; a second request while it runs waits for the same result. */
+  #startInstall(
+    key: string,
+    invocation: NativeInvocation,
+    install: (signal: AbortSignal) => Promise<PluginNativeStatus>,
+  ): Promise<PluginNativeStatus> | undefined {
     if (!this.#installing.has(key)) {
       const controller = new AbortController();
       this.#installControllers.set(key, controller);
       this.#installing.set(
         key,
-        this.#install(runtime, install, root, AbortSignal.any([invocation.signal, controller.signal]), emit).finally(
-          () => {
-            this.#installing.delete(key);
-            this.#installControllers.delete(key);
-          },
-        ),
+        install(AbortSignal.any([invocation.signal, controller.signal])).finally(() => {
+          this.#installing.delete(key);
+          this.#installControllers.delete(key);
+        }),
       );
     }
     return this.#installing.get(key);
   }
   /** The last install record; one still marked active with no install running here was interrupted. */
-  async #installation(root: string, runtime: PluginNativeRuntime, key: string) {
+  async #installation(root: string, id: string, key: string) {
     const job = JSON.parse(
-      await readFile(path.join(root, `runtime-install-${runtime.id}.json`), "utf8").catch(
-        (e: NodeJS.ErrnoException) => {
-          if (isMissing(e)) return "null";
-          throw e;
-        },
-      ),
+      await readFile(path.join(root, `runtime-install-${id}.json`), "utf8").catch((e: NodeJS.ErrnoException) => {
+        if (isMissing(e)) return "null";
+        throw e;
+      }),
     ) as PluginRuntimeInstall | null;
     if (!job?.active || this.#installing.has(key)) return job;
     return { ...job, active: false, phase: InstallPhase.Interrupted, error: MESSAGE.InstallInterrupted };
@@ -588,6 +642,7 @@ export class PluginNativeServices {
     validateValues(recipe, args.values);
     const status = await this.detect(runtime, root);
     if (status.state !== NativeRuntimeState.Ready || !status.path) throw new Error(status.detail);
+    const downloads = await readyDownloads(manifest, recipe, root);
     invocation.signal.throwIfAborted();
     const id = randomUUID();
     const jobDir = path.join(jobs, id);
@@ -599,8 +654,18 @@ export class PluginNativeServices {
       inputDir: path.join(jobDir, "inputs"),
     };
     await mkdir(dirs.output, { recursive: true });
+    // A nested declared output gets its folder here: the sandboxed job may have no mkdir.
+    for (const file of recipe.outputs) await mkdir(path.dirname(path.join(dirs.output, file)), { recursive: true });
     await mkdir(dirs.scratch, { recursive: true });
     await mkdir(dirs.inputDir);
+    if (recipe.project) {
+      dirs.project = path.join(jobDir, "project");
+      // A game past the declared caps is refused before the job exists, leaving no record behind.
+      await copyProjectSnapshot(binding.directory, dirs.project, recipe.project).catch(async (e) => {
+        await rm(jobDir, { recursive: true, force: true });
+        throw e;
+      });
+    }
     // A script gets only the explicitly declared input files. Reading the entire project would
     // also grant Python access to nested .env/private keys and race newly created secret files.
     const inputIdentities: NonNullable<PluginNativeResult["inputs"]> = {};
@@ -626,11 +691,19 @@ export class PluginNativeServices {
       await atomicWriteJson(path.join(jobDir, "job.json"), record);
       emit({ kind: NativeEventKind.NativeJob, ...record });
     };
-    const argv = await jobArgv(recipe, directory, inputs, dirs.output, args.values);
+    const argv = await jobArgv(recipe, {
+      directory,
+      inputs,
+      output: dirs.output,
+      values: args.values,
+      project: dirs.project,
+      downloads,
+    });
     await save();
     this.#active.add(id);
     try {
-      await this.#execute(recipe, status.path, argv, directory, root, dirs, record, invocation);
+      const reads = [directory, dirs.inputDir, ...Object.values(downloads)];
+      await this.#execute(recipe, status.path, argv, reads, root, dirs, record, invocation);
     } catch (e) {
       record.state = invocation.signal.aborted ? NativeJobState.Cancelled : NativeJobState.Failed;
       record.reason = errorMessage(e);
@@ -646,7 +719,7 @@ export class PluginNativeServices {
     recipe: PluginNativeJob,
     binary: string,
     argv: string[],
-    directory: string,
+    reads: string[],
     root: string,
     dirs: JobDirs,
     record: PluginNativeResult,
@@ -659,8 +732,8 @@ export class PluginNativeServices {
       args: argv,
       cwd: dirs.inputDir,
       scratch: dirs.scratch,
-      reads: [binaryRoot, directory, dirs.inputDir],
-      writes: [dirs.output],
+      reads: [binaryRoot, ...reads],
+      writes: [dirs.output, ...(dirs.project ? [dirs.project] : [])],
       denyRead: [
         ...this.protectedPaths,
         path.join(root, "credentials"),
@@ -668,6 +741,7 @@ export class PluginNativeServices {
         path.join(os.homedir(), ".genex"),
       ],
       gpu: recipe.gpu,
+      ...(recipe.osTempFiles ? { osTempFiles: recipe.osTempFiles } : {}),
       signal: invocation.signal,
       timeoutMs: recipe.timeoutMs,
       maxOutputBytes: recipe.maxOutputBytes,
@@ -691,7 +765,7 @@ export class PluginNativeServices {
   ): Promise<PluginNativeStatus> {
     const downloads = path.join(root, "runtime-downloads");
     const recorder = installRecorder(
-      runtime,
+      runtime.id,
       install.bytes,
       path.join(root, `runtime-install-${runtime.id}.json`),
       emit,
@@ -735,6 +809,7 @@ export class PluginNativeServices {
       await mkdir(swap.stage, { recursive: true });
       recorder.progress(InstallPhase.Extracting);
       if (install.format === "dmg") await extractDmg(install, archive, downloads, swap, signal);
+      else if (install.format === "zip") await extractZip(archive, swap.stage, signal);
       else await extractTarball(archive, swap.stage, signal);
       signal.throwIfAborted();
       await this.#verifyStaged(runtime, install, root, swap.stage);
@@ -759,6 +834,69 @@ export class PluginNativeServices {
         );
         await rm(swap.mount, { recursive: true, force: true });
       }
+      await rm(swap.stage, { recursive: true, force: true });
+    }
+  }
+  /**
+   * Fetch a pinned archive, unpack only its declared members and swap them into place. The
+   * archive itself is removed afterwards: an engine's template bundle is far larger than the
+   * members a job reads.
+   */
+  async #installDownload(
+    item: PluginNativeDownload,
+    root: string,
+    signal: AbortSignal,
+    emit: Emit,
+  ): Promise<PluginNativeStatus> {
+    const downloads = path.join(root, "runtime-downloads");
+    const recorder = installRecorder(item.id, item.bytes, path.join(root, `runtime-install-${item.id}.json`), emit);
+    const destination = downloadDir(root, item.id);
+    const swap: RuntimeSwap = {
+      stage: `${destination}.staging-${randomUUID()}`,
+      destination,
+      previous: `${destination}.previous`,
+      activated: false,
+      hadPrevious: false,
+    };
+    try {
+      recorder.progress(InstallPhase.Preflight);
+      await recorder.flush();
+      await mkdir(downloads, { recursive: true });
+      const disk = await statfs(root);
+      if (disk.bavail * disk.bsize < item.bytes + item.unpackedBytes + DISK_RESERVE_BYTES)
+        throw new Error(MESSAGE.NoSpace);
+      signal.throwIfAborted();
+      const archive = await download(
+        { name: path.basename(new URL(item.url).pathname), url: item.url, bytes: item.bytes, sha256: item.sha256 },
+        downloads,
+        signal,
+        (p) =>
+          recorder.progress(
+            p.status === DownloadStatus.Downloading ? InstallPhase.Downloading : InstallPhase.Verifying,
+            { completed: p.completed, total: p.total },
+          ),
+      );
+      await recorder.flush();
+      await mkdir(swap.stage, { recursive: true });
+      recorder.progress(InstallPhase.Extracting);
+      await extractZipMembers(archive, swap.stage, item.members, signal);
+      signal.throwIfAborted();
+      await activateRuntime(swap);
+      recorder.progress(InstallPhase.Ready);
+      await recorder.flush();
+      // Only once Ready is durable: until then a failure restores the previous copy.
+      await rm(swap.previous, { recursive: true, force: true });
+      await rm(archive, { force: true });
+      return downloadStatus(item, root);
+    } catch (e) {
+      if (swap.activated) {
+        await rename(swap.destination, swap.stage);
+        if (swap.hadPrevious) await rename(swap.previous, swap.destination);
+      }
+      recorder.progress(signal.aborted ? InstallPhase.Cancelled : InstallPhase.Failed, { error: errorMessage(e) });
+      await recorder.settle();
+      throw e;
+    } finally {
       await rm(swap.stage, { recursive: true, force: true });
     }
   }
