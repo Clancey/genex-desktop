@@ -110,6 +110,26 @@ test("picker groups models by who makes them", () => {
     ["Local models", "Claude models", "ChatGPT models"],
   );
 });
+test("an OpenAI-compatible endpoint's models sit under their own header, tagged as a server's", () => {
+  const endpoint: EngineDescriptor = {
+    id: "openai-compatible",
+    label: "OpenAI-compatible endpoint",
+    kind: "direct",
+    status: { code: "ready", detail: "2 model(s) at http://gpu-box:1234/v1" },
+    defaultModel: null,
+    models: [model("qwen3-coder-30b"), { ...model("chat-only"), supportsTools: false }],
+  };
+  const choices = toChoices([engines[0]!, endpoint]);
+  assert.deepEqual(
+    choices.map((c) => [c.key, c.group, c.tag, c.disabled]),
+    [
+      ["bonsai::bonsai-pq", "Local models", "local", false],
+      ["openai-compatible::qwen3-coder-30b", "Server models", "server", false],
+      ["openai-compatible::chat-only", "Server models", "no tools", true],
+    ],
+  );
+  assert.equal(toChoices([{ ...endpoint, status: { code: "not_running", detail: "no answer" } }]).length, 0);
+});
 test("one effort serves every role at the closest level each model accepts", () => {
   const choices = toChoices(engines),
     selected = resolveChoice(choices, "codex::gpt-6-astra");

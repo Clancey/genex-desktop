@@ -1373,10 +1373,13 @@ export const COMPACT_WORDS = {
 export const MODEL_PICKER_WORDS = {
   unavailable: "This model is unavailable. Check the connection or choose another model.",
   localModels: "Local models",
+  /** The person's own OpenAI-compatible server, usually another machine on their network. */
+  serverModels: "Server models",
   chatGptModels: "ChatGPT models",
   claudeModels: "Claude models",
   local: "local",
   localStale: "local · stale",
+  server: "server",
   noTools: "no tools",
   cannotCallTools: "This model cannot call tools, so it cannot build",
   subscription: "subscription",

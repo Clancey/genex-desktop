@@ -72,7 +72,7 @@ describe("engines", () => {
   it("have one id table the provider list comes from", () => {
     assert.deepEqual(
       PROVIDERS.map((provider) => provider.id),
-      [EngineId.ClaudeCode, EngineId.Codex, EngineId.Bonsai, EngineId.Ollama],
+      [EngineId.ClaudeCode, EngineId.Codex, EngineId.Bonsai, EngineId.Ollama, EngineId.OpenAICompatible],
     );
   });
 

@@ -170,6 +170,8 @@ const METHODS = [
   "lookupModel",
   "cancelModelDownload",
   "removeModel",
+  "openAIEndpoint",
+  "saveOpenAIEndpoint",
   "revealProject",
   "readGameFile",
   "revealGameFile",

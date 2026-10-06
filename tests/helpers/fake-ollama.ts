@@ -96,6 +96,13 @@ export interface FakeOllamaOptions {
     messages: Array<{ role: string; content: string; images?: FixtureImage[] }>;
     tools?: unknown[];
   }) => FakeReply | null;
+  /**
+   * The `data` an OpenAI-compatible `GET /v1/models` lists (LM Studio, vLLM, llama.cpp…). Left
+   * out, the route lists the Ollama models by name, as Ollama's own `/v1/models` does.
+   */
+  openaiModels?: unknown[];
+  /** When set, every `/v1/*` request must carry `Authorization: Bearer <this>` or gets a 401. */
+  requireBearer?: string;
 }
 
 export interface FakeOllama {
@@ -167,6 +174,16 @@ export async function startFakeOllama(options: FakeOllamaOptions = {}): Promise<
         if (index < 0) return json({ error: `model '${name}' not found` }, 404);
         models.splice(index, 1);
         return json({ status: "ok" });
+      }
+
+      if (url.startsWith("/v1/") && options.requireBearer !== undefined) {
+        if (req.headers.authorization !== `Bearer ${options.requireBearer}`) {
+          return json({ error: { message: "Invalid API key", type: "invalid_request_error" } }, 401);
+        }
+      }
+      if (url === "/v1/models") {
+        const data = options.openaiModels ?? models.map((m) => ({ id: m.name, object: "model", owned_by: "library" }));
+        return json({ object: "list", data });
       }
 
       if (url.startsWith("/v1/chat/completions")) {

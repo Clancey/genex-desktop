@@ -178,6 +178,8 @@ export const STUDIO_INVOKE_CHANNELS = {
   "studio:pull-model": "pullModel",
   "studio:models.lookup": "lookupModel",
   "studio:models.remove": "removeModel",
+  "studio:openai-endpoint.get": "openAIEndpoint",
+  "studio:openai-endpoint.save": "saveOpenAIEndpoint",
   "studio:reveal-project": "revealProject",
   "studio:game-file.read": "readGameFile",
   "studio:game-file.reveal": "revealGameFile",
@@ -357,6 +359,8 @@ export interface StudioInvokePayloads {
   "studio:pull-model": { model: string };
   "studio:models.lookup": { model: string };
   "studio:models.remove": { model: string };
+  "studio:openai-endpoint.get": undefined;
+  "studio:openai-endpoint.save": Arg<"saveOpenAIEndpoint", 0>;
   "studio:reveal-project": { project: string; file?: string };
   "studio:game-file.read": { threadId: string; path: string };
   "studio:game-file.reveal": { threadId: string; path: string };

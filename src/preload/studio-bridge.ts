@@ -210,6 +210,8 @@ function studioCalls(bridge: BridgeCalls) {
     pullModel: (model) => invoke("studio:pull-model", { model }),
     lookupModel: (model) => invoke("studio:models.lookup", { model }),
     removeModel: (model) => invoke("studio:models.remove", { model }),
+    openAIEndpoint: () => invoke("studio:openai-endpoint.get"),
+    saveOpenAIEndpoint: (update) => invoke("studio:openai-endpoint.save", update),
     openUrl: (url) => invoke("studio:open-url", { url }),
     notify: (note) => invoke("studio:notify", note),
     setBadge: (count) => invoke("studio:badge", { count }),

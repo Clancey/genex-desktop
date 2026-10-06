@@ -12,6 +12,7 @@ import { Button } from "../ui/Button.tsx";
 import { Icon } from "../ui/icons.tsx";
 import type { ModelSettingsProps } from "./ModelsSection.tsx";
 import { Pending } from "../ui/Pending.tsx";
+import { EndpointSection } from "./EndpointSection.tsx";
 
 /** Where the Add from Ollama hint sends the user to find a model's name. */
 const OLLAMA_LIBRARY_URL = "https://ollama.com/search";
@@ -805,6 +806,11 @@ export function LocalModelsSection({ engines, onEnginesRefresh }: ModelSettingsP
           installOllamaFor={installOllamaFor}
         />
       )}
+
+      <EndpointSection
+        engine={engines.find((engine) => engine.id === EngineId.OpenAICompatible)}
+        onEnginesRefresh={onEnginesRefresh}
+      />
     </div>
   );
 }

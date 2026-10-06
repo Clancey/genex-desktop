@@ -38,6 +38,7 @@ export const EngineId = {
   Codex: "codex",
   Bonsai: "bonsai",
   Ollama: "ollama",
+  OpenAICompatible: "openai-compatible",
 } as const;
 export type EngineId = (typeof EngineId)[keyof typeof EngineId];
 

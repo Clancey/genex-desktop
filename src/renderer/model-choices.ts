@@ -37,6 +37,7 @@ const VENDOR_GROUP: Partial<Record<string, string>> = {
 
 /** Section header a picker row sits under: who makes the models. */
 function groupLabel(engine: EngineDescriptor): string {
+  if (engine.id === EngineId.OpenAICompatible) return MODEL_PICKER_WORDS.serverModels;
   if (engine.kind === EngineKind.Direct) return MODEL_PICKER_WORDS.localModels;
   return VENDOR_GROUP[engine.id] ?? engine.label;
 }
@@ -59,8 +60,9 @@ function engineChoices(engine: EngineDescriptor, picker: PickerChoices[string] |
   return [subscriptionRow(engine, ready)];
 }
 
-function localTag(model: EngineModel): string {
+function localTag(engine: EngineDescriptor, model: EngineModel): string {
   if (!model.supportsTools) return MODEL_PICKER_WORDS.noTools;
+  if (engine.id === EngineId.OpenAICompatible) return MODEL_PICKER_WORDS.server;
   return model.stale ? MODEL_PICKER_WORDS.localStale : MODEL_PICKER_WORDS.local;
 }
 
@@ -75,7 +77,7 @@ function localChoice(engine: EngineDescriptor, model: EngineModel): ModelChoice 
     supportsSessions: engine.supportsSessions ?? false,
     ...(model.efforts?.length ? { efforts: model.efforts } : {}),
     ...(model.defaultEffort ? { defaultEffort: model.defaultEffort } : {}),
-    tag: localTag(model),
+    tag: localTag(engine, model),
     disabled: !model.supportsTools,
     ...(model.supportsTools ? {} : { title: MODEL_PICKER_WORDS.cannotCallTools }),
   };

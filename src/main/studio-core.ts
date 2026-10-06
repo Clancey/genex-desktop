@@ -63,6 +63,8 @@ import { BonsaiEngine } from "../substrate/engines/bonsai.ts";
 import { ClaudeCodeEngine } from "../substrate/engines/claude-code.ts";
 import { CodexEngine } from "../substrate/engines/codex.ts";
 import { OllamaEngine, OllamaSidecar } from "../substrate/engines/ollama.ts";
+import { OpenAICompatibleEngine } from "../substrate/engines/openai-compatible.ts";
+import { OpenAIEndpointSettings } from "./core/openai-endpoint.ts";
 import { EngineRegistry } from "../substrate/engines/registry.ts";
 import type { Engine, LiveToolResult } from "../substrate/engines/types.ts";
 import { EventStore } from "../substrate/event-store.ts";
@@ -359,6 +361,8 @@ export class StudioCore {
    * UI, over IPC, can change what is on the list.
    */
   mcp!: McpRegistry;
+  /** Settings → Local Models: the person's OpenAI-compatible endpoint and its key. */
+  openaiEndpoint!: OpenAIEndpointSettings;
   host!: HarnessHost;
   /** The studio's own conversation: chat, runs and self-changes all land in one log. */
   mainThread!: string;
@@ -556,6 +560,7 @@ export class StudioCore {
     await this.#wireMcp();
     this.builds = this.#createBuilds();
     this.#registerEngines();
+    await this.#wireOpenAIEndpoint();
     this.host = this.#createHarnessHost();
     mark("engines");
   }
@@ -920,7 +925,31 @@ export class StudioCore {
     for (const engine of engines) this.engines.register(engine);
     // Local first: it is the one engine that cannot be rate limited, which is what makes it
     // the fallback when a subscription throttles mid-night.
-    this.engines.setPreferredOrder([EngineId.Bonsai, EngineId.Ollama, ...SUBSCRIPTION_ENGINES]);
+    this.engines.setPreferredOrder([
+      EngineId.Bonsai,
+      EngineId.Ollama,
+      EngineId.OpenAICompatible,
+      ...SUBSCRIPTION_ENGINES,
+    ]);
+  }
+
+  /**
+   * The endpoint saved in Settings, applied to the endpoint engine when this build registers one
+   * (fixture profiles do not). Its key lives in the studio's own secret store, which no agent reads.
+   */
+  async #wireOpenAIEndpoint(): Promise<void> {
+    this.openaiEndpoint = new OpenAIEndpointSettings({
+      file: path.join(this.options.paths.userData, "openai-endpoint.json"),
+      secrets: async () => (await mcpSecretPort(this.layout.secrets)).port,
+      apply: (config) => {
+        if (!this.engines.has(EngineId.OpenAICompatible)) return;
+        const engine = this.engines.get(EngineId.OpenAICompatible);
+        if (!(engine instanceof OpenAICompatibleEngine)) return;
+        engine.configure(config);
+        this.emit(UiEvent.EnginesChanged, { engine: EngineId.OpenAICompatible });
+      },
+    });
+    await this.openaiEndpoint.load();
   }
 
   #defaultEngines(): Engine[] {
@@ -932,6 +961,7 @@ export class StudioCore {
         toolPath: async () => (await this.sandbox.toolPath()) ?? process.env.PATH ?? "",
       }),
       new OllamaEngine({ ...(this.options.ollamaHost ? { host: this.options.ollamaHost } : {}) }),
+      new OpenAICompatibleEngine(),
       new ClaudeCodeEngine({
         onModelsChanged: () => this.emit(UiEvent.EnginesChanged, { engine: EngineId.ClaudeCode }),
         engineHome: path.join(this.layout.engineHomes, EngineId.ClaudeCode),
@@ -1206,6 +1236,7 @@ export class StudioCore {
       ...credentialEnvValues(process.env),
       ...(this.mcp?.secretValues() ?? []),
       ...(this.plugins?.heldCredentials() ?? []),
+      ...(this.openaiEndpoint?.secretValues() ?? []),
     ];
   }
 

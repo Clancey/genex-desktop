@@ -6,12 +6,18 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
 import { createIpcHandle, type IpcResult, type IpcSender } from "../../src/main/ipc-handle.ts";
 import { KEEP_AWAKE_FALLBACK_MS, KeepAwake, type FallbackTimers } from "../../src/main/keep-awake.ts";
 import { registerRunsIpc, extFromMime, safeLabel, type RunsIpcDeps } from "../../src/main/ipc/runs.ts";
 import { registerLoginIpc, type LoginIpcDeps } from "../../src/main/ipc/login.ts";
 import { badgeText, registerNotificationsIpc } from "../../src/main/ipc/notifications.ts";
 import { registerModelsIpc, type ModelsIpcDeps } from "../../src/main/ipc/models.ts";
+import { OpenAIEndpointSettings } from "../../src/main/core/openai-endpoint.ts";
+import { OpenAICompatibleEngine } from "../../src/substrate/engines/openai-compatible.ts";
+import { memorySecretPort } from "../../src/substrate/mcp/store.ts";
+import { startFakeOllama } from "../helpers/fake-ollama.ts";
+import { tmpDir } from "../helpers/tmp.ts";
 import { registerUpdateIpc } from "../../src/main/ipc/update.ts";
 import { createLoginControllers, type SubscriptionEngine } from "../../src/main/login-controllers.ts";
 import type { ClaudeLoginState } from "../../src/shared/claude-login.ts";
@@ -519,7 +525,8 @@ it("model refresh validates provider identities before invoking discovery", asyn
     },
   });
   // Only the registrar's engine registry is needed; no profile or credentials are opened.
-  const core = { engines };
+  const openaiEndpoint = new OpenAIEndpointSettings({ file: "", secrets: async () => null, apply: () => {} });
+  const core = { engines, openaiEndpoint };
   const { handle, invoke } = registrar();
   registerModelsIpc(handle, { core, subscription: () => null, pushUiEvent: () => {} });
   for (const provider of [undefined, null, 7, {}, "../codex", "ollama", ""]) {
@@ -632,4 +639,47 @@ describe("the in-window update prompt", () => {
     assert.equal((await fixture.invoke("studio:update.download")).ok, false);
     assert.deepEqual(fixture.restarts, []);
   });
+});
+
+it("saving the endpoint validates it, keeps its key in main and lists the server's models", async () => {
+  const { EngineRegistry } = await import("../../src/substrate/engines/registry.ts");
+  const server = await startFakeOllama({ requireBearer: "sk-remote", openaiModels: [{ id: "remote-coder" }] });
+  try {
+    const engines = new EngineRegistry();
+    const engine = new OpenAICompatibleEngine();
+    engines.register(engine);
+    const openaiEndpoint = new OpenAIEndpointSettings({
+      file: path.join(await tmpDir("endpoint-ipc-"), "openai-endpoint.json"),
+      secrets: async () => memorySecretPort(),
+      apply: (config) => engine.configure(config),
+    });
+    const { handle, invoke } = registrar();
+    registerModelsIpc(handle, { core: { engines, openaiEndpoint }, subscription: () => null, pushUiEvent: () => {} });
+
+    for (const payload of [undefined, null, "http://box", { baseUrl: "ftp://box" }, { baseUrl: "http://a:b@box" }]) {
+      assert.equal((await invoke("studio:openai-endpoint.save", payload)).ok, false, JSON.stringify(payload));
+    }
+    assert.equal(engine.baseUrl, null, "a refused save points the engine nowhere");
+
+    const saved = await invoke("studio:openai-endpoint.save", { baseUrl: server.host, apiKey: "sk-remote" });
+    assert.deepEqual(saved, {
+      ok: true,
+      value: {
+        endpoint: { baseUrl: `${server.host}/v1`, hasApiKey: true, canStoreApiKey: true },
+        modelCount: 1,
+        error: null,
+      },
+    });
+    const read = await invoke("studio:openai-endpoint.get");
+    assert.doesNotMatch(JSON.stringify(read), /sk-remote/, "the key never crosses to the renderer");
+
+    const refused = await invoke("studio:openai-endpoint.save", { baseUrl: server.host, apiKey: "sk-wrong" });
+    assert.equal(refused.ok, true, "a refused key still saves the endpoint");
+    const probe = refused.ok ? (refused.value as { modelCount: number | null; error: string | null }) : null;
+    assert.equal(probe?.modelCount, null);
+    assert.match(probe?.error ?? "", /refused the API key/);
+    assert.doesNotMatch(JSON.stringify(refused), /sk-wrong/);
+  } finally {
+    await server.close();
+  }
 });
