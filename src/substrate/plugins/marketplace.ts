@@ -430,6 +430,7 @@ export const STUDIO_CATALOG_POLICY: CatalogPolicy = {
   official: {
     genex: { publisher: "Genex", repos: OFFICIAL_REPOS },
     blender: { publisher: "Studio", repos: OFFICIAL_REPOS },
+    godot: { publisher: "Studio", repos: OFFICIAL_REPOS },
   },
 };
 

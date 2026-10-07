@@ -27,13 +27,38 @@ export interface PluginNativeRuntime {
     sha256: string;
     bytes: number;
     unpackedBytes: number;
-    format: "dmg" | "tar.gz";
+    format: "dmg" | "tar.gz" | "zip";
     entry: string;
     executable: string;
     notices: string[];
   };
 }
-export type PluginNativeArg = string | { source: "package" | "input" | "output" | "value"; name: string };
+/**
+ * API 3. A pinned file set a job reads but never runs (engine export templates): selected members
+ * of one archive, installed by a confirmed setup action into plugin storage.
+ */
+export interface PluginNativeDownload {
+  id: string;
+  label: string;
+  action: string;
+  url: string;
+  sha256: string;
+  bytes: number;
+  unpackedBytes: number;
+  format: "zip";
+  /** Archive paths extracted into the download folder; everything else in the archive is discarded. */
+  members: string[];
+}
+/** A job's writable copy of the game folder, without dotfiles, dependencies, agent files, keys or links. */
+export interface PluginNativeProjectSnapshot {
+  maxFiles: number;
+  maxBytes: number;
+  /** Game-relative folders or files left out of the copy. */
+  exclude?: string[];
+}
+export type PluginNativeArg =
+  | string
+  | { source: "package" | "input" | "output" | "value" | "project" | "download"; name: string };
 export interface PluginNativeJob {
   id: string;
   runtime: string;
@@ -49,6 +74,10 @@ export interface PluginNativeJob {
   maxAssetBytes: number;
   /** Needed for GPU rendering, including Blender EEVEE; permits the runtime's Metal cache. */
   gpu?: boolean;
+  /** File names (at most 4) the runtime writes straight into the user's OS temp folder, ignoring TMPDIR. Each is granted alone; jobs naming one run one at a time. */
+  osTempFiles?: string[];
+  /** Bound by `{ source: "project" }`: a writable game copy that is never delivered back. Needs project.read. */
+  project?: PluginNativeProjectSnapshot;
 }
 export interface PluginNativeStatus {
   state: "ready" | "missing" | "incompatible" | "failed";
@@ -57,6 +86,7 @@ export interface PluginNativeStatus {
   detail: string;
 }
 export interface PluginRuntimeInstall {
+  /** The runtime id, or the download id for a `nativeDownloads` install. */
   runtime: string;
   phase: "preflight" | "downloading" | "verifying" | "extracting" | "ready" | "failed" | "cancelled" | "interrupted";
   completed: number;
@@ -218,6 +248,7 @@ export interface PluginManifest {
   assetLimits?: { fileBytes: number; projectBytes: number };
   nativeRuntimes?: PluginNativeRuntime[];
   nativeJobs?: PluginNativeJob[];
+  nativeDownloads?: PluginNativeDownload[];
   apiVersion: PluginApiVersion;
   id: string;
   version: string;
@@ -284,11 +315,15 @@ export interface PluginEvent {
  * during an active invocation. An unknown method name is a type error, not a runtime surprise.
  */
 export interface PluginHostCall {
-  (method: "runtime.detect", args: { runtime: string }): Promise<PluginNativeStatus>;
-  (method: "runtime.install", args: { runtime: string }): Promise<PluginNativeStatus>;
-  (method: "runtime.installation", args: { runtime: string }): Promise<PluginRuntimeInstall | null>;
+  /** `{ download }` names a declared `nativeDownloads` entry instead of a runtime. */
+  (method: "runtime.detect", args: { runtime: string } | { download: string }): Promise<PluginNativeStatus>;
+  (method: "runtime.install", args: { runtime: string } | { download: string }): Promise<PluginNativeStatus>;
+  (
+    method: "runtime.installation",
+    args: { runtime: string } | { download: string },
+  ): Promise<PluginRuntimeInstall | null>;
   /** User setup actions only. Downloaded partial bytes remain available for retry. */
-  (method: "runtime.cancelInstall", args: { runtime: string }): Promise<true>;
+  (method: "runtime.cancelInstall", args: { runtime: string } | { download: string }): Promise<true>;
   (
     method: "native.run",
     args: { job: string; inputs: Record<string, string>; values: Record<string, string> },

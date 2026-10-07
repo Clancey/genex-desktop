@@ -1564,7 +1564,9 @@ export class PluginRegistry {
     const opensCredentials = name === account.unlock || name === account.connect;
     // A refusal left by an earlier attempt, such as the restore at startup, is not this action's.
     if (opensCredentials) this.#accounts.get(id)?.takeRefusal();
-    const installsRuntime = p.manifest.nativeRuntimes?.some((r) => r.install?.action === name);
+    const installsRuntime =
+      p.manifest.nativeRuntimes?.some((r) => r.install?.action === name) ||
+      p.manifest.nativeDownloads?.some((d) => d.action === name);
     try {
       const answer = await this.#process(id).call(
         "action",

@@ -50,6 +50,7 @@ const SHEBANG_READ_BYTES = 256;
 const MESSAGE = {
   InvalidCacheIdentity: "Invalid native application cache identity",
   CacheCrossesSymlink: "Native runtime cache crosses a symlink",
+  InvalidTempFolder: "Unexpected characters in the user's OS temp folder",
 } as const;
 
 /** The folder a runtime may start programs from: its `.app` bundle, or the executable's own directory. */
@@ -79,6 +80,52 @@ async function gpuCache(binary: string): Promise<string[]> {
   if ((await lstat(cache)).isSymbolicLink() || (await realpath(cache)) !== cache)
     throw new Error(MESSAGE.CacheCrossesSymlink);
   return [cache];
+}
+/**
+ * Some runtimes write one fixed file straight into the user's OS temp folder, ignoring TMPDIR
+ * (Godot's editor saves `tmpproject.binary` to `NSTemporaryDirectory()` while exporting). Grant
+ * exactly those files, never the folder: it holds every application's temporary files.
+ * Returns their full paths.
+ */
+async function osTempFiles(names: string[]): Promise<string[]> {
+  if (!names.length) return [];
+  const base = await realpath(
+    (await exec("/usr/bin/getconf", ["DARWIN_USER_TEMP_DIR"], { timeout: PROBE_TIMEOUT_MS })).stdout.trim(),
+  );
+  if (!SAFE_TEMP_BASE.test(base)) throw new Error(MESSAGE.InvalidTempFolder);
+  return names.map((name) => path.join(base, name));
+}
+/** A path with no character a Seatbelt regex would read as syntax, before escaping `.` and `+`. */
+const SAFE_TEMP_BASE = /^\/[A-Za-z0-9_/.+-]+$/;
+/** One of the six characters mkstemp(3) fills in; Seatbelt's regex has no `{6}`. */
+const MKSTEMP_CHAR = "[A-Za-z0-9]";
+/** The file itself, and the `<file>-XXXXXX` sibling mkstemp(3) makes for a safe save and renames over it. */
+const osTempFileRules = (file: string) =>
+  `(literal ${quote(file)}) (regex #"^${file.replace(/[.+]/g, "\\$&")}-${MKSTEMP_CHAR.repeat(6)}$")`;
+/** The tail of each OS temp file's queue: jobs naming one file run one at a time. */
+const osTempQueues = new Map<string, Promise<void>>();
+/** Run `work` once no other job holds any of `names`; names are taken in order, so two jobs never wait on each other. */
+async function holdingOsTempFiles<T>(names: string[], work: () => Promise<T>): Promise<T> {
+  const releases: (() => void)[] = [];
+  for (const name of [...new Set(names)].sort()) {
+    const previous = osTempQueues.get(name) ?? Promise.resolve();
+    let resolve = () => {};
+    const held = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const tail = previous.then(() => held);
+    osTempQueues.set(name, tail);
+    releases.push(() => {
+      resolve();
+      if (osTempQueues.get(name) === tail) osTempQueues.delete(name);
+    });
+    await previous;
+  }
+  try {
+    return await work();
+  } finally {
+    for (const release of releases) release();
+  }
 }
 /**
  * setsid(2) and setpgid(2), by their macOS syscall numbers: a descendant that could call them
@@ -122,6 +169,8 @@ export function nativeSandboxProfile(p: {
   interpreters?: string[];
   reads: string[];
   writes: string[];
+  /** Full paths of OS temp files the job may create and replace; see `osTempFiles`. */
+  osTempFiles?: string[];
   denied: string[];
   gpu: boolean;
 }): string {
@@ -153,6 +202,9 @@ export function nativeSandboxProfile(p: {
       : [`(allow mach-lookup ${MACH_SERVICES.map((n) => `(global-name ${quote(n)})`).join(" ")})`]),
     `(allow file-read* ${subpaths(p.reads)})`,
     `(allow file-read* file-write* ${subpaths(p.writes)})`,
+    ...(p.osTempFiles?.length
+      ? [`(allow file-read* file-write* ${p.osTempFiles.map(osTempFileRules).join(" ")})`]
+      : []),
     ...(p.denied.length ? [`(deny file-read* ${subpaths(p.denied)})`] : []),
     "(deny network*)",
   ].join("\n");
@@ -247,6 +299,8 @@ export interface NativeProcessRequest {
   writes: string[];
   denyRead: string[];
   gpu?: boolean;
+  /** File names the runtime writes into the user's OS temp folder; see `osTempFiles`. */
+  osTempFiles?: string[];
   signal: AbortSignal;
   timeoutMs: number;
   maxOutputBytes: number;
@@ -287,12 +341,16 @@ async function prepareSandbox(p: NativeProcessRequest): Promise<{ profile: strin
   const binaryRoot = await realpath(root).catch(() => path.resolve(root));
   const reads = await aliases([...p.reads, binaryRoot, ...SYSTEM_READS]),
     writes = await aliases([...p.writes, p.scratch, ...(p.gpu ? await gpuCache(p.binary) : [])]),
-    denied = await aliases(p.denyRead);
+    denied = await aliases(p.denyRead),
+    tempFiles = await osTempFiles(p.osTempFiles ?? []);
   const home = path.join(p.scratch, "home");
   await mkdir(home, { recursive: true });
   const interpreters = await scriptInterpreters(p.binary);
   const profile = path.join(p.scratch, "native.sb");
-  await writeFile(profile, nativeSandboxProfile({ binaryRoot, interpreters, reads, writes, denied, gpu: !!p.gpu }));
+  await writeFile(
+    profile,
+    nativeSandboxProfile({ binaryRoot, interpreters, reads, writes, osTempFiles: tempFiles, denied, gpu: !!p.gpu }),
+  );
   return { profile, home };
 }
 
@@ -404,7 +462,12 @@ function superviseJob(
   });
 }
 
+/** Run one job under its Seatbelt profile, after any job sharing one of its OS temp files. */
 export async function runNativeProcess(p: NativeProcessRequest): Promise<NativeProcessResult> {
+  return p.osTempFiles?.length ? holdingOsTempFiles(p.osTempFiles, () => runConfined(p)) : runConfined(p);
+}
+/** Start the job confined, with its private HOME and TMPDIR, and supervise it to completion. */
+async function runConfined(p: NativeProcessRequest): Promise<NativeProcessResult> {
   p.signal.throwIfAborted();
   const { profile, home } = await prepareSandbox(p);
   return new Promise<NativeProcessResult>((resolve, reject) => {

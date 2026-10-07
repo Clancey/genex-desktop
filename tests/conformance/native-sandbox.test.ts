@@ -5,7 +5,7 @@
  * descendant that started its own session. Output delivery never follows a link.
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { link, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -27,7 +27,7 @@ const darwin = process.platform === "darwin";
 async function job(
   binary: string,
   args: string[],
-  options: { timeoutMs?: number; signal?: AbortSignal; root?: string } = {},
+  options: { timeoutMs?: number; signal?: AbortSignal; root?: string; osTempFiles?: string[] } = {},
 ) {
   const root = options.root ?? (await tmpDir("native-sandbox-"));
   const output = path.join(root, "output"),
@@ -43,6 +43,7 @@ async function job(
     reads: [],
     writes: [output],
     denyRead: [],
+    ...(options.osTempFiles ? { osTempFiles: options.osTempFiles } : {}),
     signal: options.signal ?? new AbortController().signal,
     timeoutMs: options.timeoutMs ?? 5000,
     maxOutputBytes: 16000,
@@ -205,6 +206,45 @@ describe("native job sandbox profile", { skip: !darwin && "Seatbelt is macOS-onl
     const pid = survivorPid(result.stdout);
     assert.ok(pid > 0, result.stdout + result.stderr);
     assert.ok(!running(pid), "the setsid descendant was stopped with the job");
+  });
+
+  it("a job writes only the OS temp files it names, one job per name at a time (Godot's tmpproject.binary)", async () => {
+    const temp = execFileSync("/usr/bin/getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8" }).trim();
+    const name = `studio-sandbox-${process.pid}-${Date.now()}.tmp`;
+    const named = path.join(temp, name),
+      neighbour = path.join(temp, `${name}.other`);
+    const script = (tag: string) =>
+      // Godot saves through a mkstemp sibling, `<name>-XXXXXX`, then renames it over the name.
+      `/bin/date +%s%N >>"$2"; echo ${tag} >"$1/${name}-Ab3x9Z" && /bin/mv "$1/${name}-Ab3x9Z" "$1/${name}" && ` +
+      `/bin/echo wrote-${tag}; /bin/sleep 0.4; /bin/rm -f "$1/${name}"; ` +
+      `echo x >"$1/${name}.other" && /bin/echo neighbour-ran; echo x >"$1/${name}-toolong7" && /bin/echo long-ran; ` +
+      `/bin/date +%s%N >>"$2"`;
+    try {
+      const run = async (tag: string) => {
+        const root = await tmpDir("native-ostemp-");
+        const times = path.join(root, "output", "times");
+        const result = await job("/bin/sh", ["-c", script(tag), "sh", temp, times], { root, osTempFiles: [name] });
+        return { result, times: (await readFile(times, "utf8")).trim().split("\n").map(BigInt) };
+      };
+      const [a, b] = await Promise.all([run("a"), run("b")]);
+      for (const [tag, { result }] of [
+        ["a", a],
+        ["b", b],
+      ] as const) {
+        assert.match(result.stdout, new RegExp(`wrote-${tag}`), result.stderr);
+        assert.doesNotMatch(result.stdout, /neighbour-ran/, "no other file in the user temp folder");
+        assert.doesNotMatch(result.stdout, /long-ran/, "only the six-character mkstemp sibling");
+      }
+      const [first, second] = a.times[0] < b.times[0] ? [a.times, b.times] : [b.times, a.times];
+      assert.ok(first[1] <= second[0], "jobs naming the same temp file never overlap");
+      const plain = await job("/bin/sh", ["-c", `echo x >"$1/${name}" && /bin/echo plain-wrote`, "sh", temp]);
+      assert.doesNotMatch(plain.stdout, /plain-wrote/, "a job that names nothing gets nothing");
+      assert.ok(!existsSync(neighbour));
+    } finally {
+      await rm(named, { force: true });
+      await rm(neighbour, { force: true });
+      await rm(`${named}-toolong7`, { force: true });
+    }
   });
 
   it("a job that exits normally takes its detached descendants with it", async () => {

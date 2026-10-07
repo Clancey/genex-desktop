@@ -74,6 +74,14 @@ test("native manifests require declared recipes, safe aliases, a pinned digest a
     m = variant();
     m.nativeJobs![0]!.outputs = ["a\0b"];
     assert.throws(() => validateManifest(m), /Invalid native job recipe/);
+    for (const osTempFiles of [["../escape"], ["a/b"], [""], [".hidden"], "tmpproject.binary", Array(5).fill("x")]) {
+      m = variant();
+      (m.nativeJobs![0] as any).osTempFiles = osTempFiles;
+      assert.throws(() => validateManifest(m), /OS temp file/, JSON.stringify(osTempFiles));
+    }
+    m = variant();
+    m.nativeJobs![0]!.osTempFiles = ["tmpproject.binary"];
+    assert.deepEqual(validateManifest(m).nativeJobs![0]!.osTempFiles, ["tmpproject.binary"]);
     // Reproduced by an independent agent using the SDK: asset bytes were supplied as a log cap.
     m = variant();
     m.nativeJobs![0]!.maxOutputBytes = 8 * 1024 ** 2;

@@ -522,7 +522,8 @@ function validateReachSections(m: PluginManifest, canonical: PluginManifest): vo
 function validateHostSections(m: PluginManifest, canonical: PluginManifest): void {
   if (m.account !== undefined) canonical.account = validateAccount(m, canonical.actions);
   if (m.assetLimits !== undefined) canonical.assetLimits = validateAssetLimits(m);
-  if (m.nativeRuntimes !== undefined || m.nativeJobs !== undefined) {
+  const native = [m.nativeRuntimes, m.nativeJobs, m.nativeDownloads].some((v) => v !== undefined);
+  if (native) {
     if (m.apiVersion !== 3 || !hasCapability(m, PluginCapability.NativeRuntime))
       throw new Error(MESSAGE.NativeNeedsApi3);
     Object.assign(canonical, validateNativeDeclarations(m));

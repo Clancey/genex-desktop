@@ -118,12 +118,29 @@ async function buildBlender(root, resources, sdk) {
   });
 }
 
+async function buildGodot(root, resources, sdk) {
+  const godot = path.join(resources, "plugins/godot");
+  await mkdir(godot, { recursive: true });
+  for (const file of ["plugin.json", "wrapper.gd"])
+    await cp(path.join(root, "src/plugins/godot", file), path.join(godot, file));
+  await writeFile(
+    path.join(godot, "panel.html"),
+    await inlinePanelSdk(await readFile(path.join(root, "src/plugins/godot/panel.html"), "utf8"), sdk),
+  );
+  await build({
+    ...NODE_BACKEND,
+    entryPoints: [path.join(root, "src/plugins/godot/backend.ts")],
+    outfile: path.join(godot, "backend.mjs"),
+  });
+}
+
 /** Copies the SDK and builds the bundled plugins (and the example) into the app's resources. */
 export async function buildPlugins(root, resources, { dependencies = true } = {}) {
   await cp(path.join(root, "src/plugin-sdk"), path.join(resources, "plugin-sdk"), { recursive: true });
   await buildGenex(root, resources, { dependencies });
   const sdk = path.join(root, "src/plugin-sdk");
   await buildBlender(root, resources, sdk);
+  await buildGodot(root, resources, sdk);
   await mkdir(path.join(resources, "examples"), { recursive: true });
   await cp(path.join(root, "src/plugins/example"), path.join(resources, "examples/example"), { recursive: true });
   const examplePanel = path.join(resources, "examples/example/panel.html");

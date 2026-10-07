@@ -1,0 +1,164 @@
+{
+  "apiVersion": 3,
+  "id": "godot",
+  "version": "1.0.0",
+  "name": "Local Godot",
+  "publisher": "Studio",
+  "description": "Check and export Godot 4 projects to the web with Godot on this Mac. No account or credits.",
+  "backend": "backend.mjs",
+  "capabilities": ["native-runtime", "project.read", "project.write", "jobs", "observe"],
+  "tools": [
+    {
+      "name": "status",
+      "description": "Inspect local Godot and web export template readiness and recorded jobs.",
+      "parameters": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "check",
+      "description": "Import this Godot project headless, load every GDScript and boot the main scene for 120 frames. Returns parse, script and runtime errors per step. Run after editing scenes or scripts.",
+      "parameters": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "export",
+      "description": "Export this Godot project to the web (single-threaded build) and deliver index.html with its .js, .wasm and .pck. Uses the Web preset in export_presets.cfg, creating one when absent. Returns the delivered paths; preview the returned index.html.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "preset": {
+            "type": "string",
+            "description": "Optional name of an existing Web export preset. Omit to use the first Web preset."
+          }
+        }
+      }
+    },
+    {
+      "name": "retrieve",
+      "description": "Retrieve an existing local Godot job without repeating it.",
+      "parameters": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] }
+    }
+  ],
+  "skills": [
+    {
+      "name": "local-godot",
+      "text": "For a Godot 4 project (project.godot at the game root), Local Godot runs the pinned Godot 4.7.2 on this Mac. Inspect godot__status first; the user installs Godot and its web export templates from plugin setup. After editing .gd, .tscn or project.godot call godot__check and fix every reported error before continuing. To play the game in the preview call godot__export, then open the returned web/index.html. Exports are single-threaded and need no cross-origin isolation headers. Jobs run on a copy of the project: dotfiles (including .godot/), node_modules, agent files and keys are not copied and nothing the job changes is written back; only the exported files are delivered. Keep the project under 20000 files and 512 MiB. Prefer the Compatibility renderer (rendering/renderer/rendering_method=\"gl_compatibility\"), which the web export supports best. C# projects cannot be exported to the web."
+    }
+  ],
+  "panels": [{ "id": "setup", "title": "Local Godot", "file": "panel.html", "placement": "settings" }],
+  "settings": [],
+  "actions": [
+    { "name": "status", "label": "Runtime and jobs" },
+    {
+      "name": "install",
+      "label": "Download Godot 4.7.2",
+      "confirmation": "Download the pinned Godot 4.7.2 editor (about 171 MB) into this plugin’s storage. Studio verifies its digest. Existing Godot installations stay unchanged."
+    },
+    { "name": "cancel-install", "label": "Cancel download" },
+    {
+      "name": "install-templates",
+      "label": "Download web export templates",
+      "confirmation": "Download the pinned Godot 4.7.2 export templates (about 1.3 GB) and keep only the web templates (about 20 MB). Studio verifies the digest and removes the full archive afterwards."
+    },
+    { "name": "cancel-templates", "label": "Cancel templates download" }
+  ],
+  "nativeRuntimes": [
+    {
+      "id": "godot",
+      "label": "Godot",
+      "candidates": [
+        "/Applications/Godot.app/Contents/MacOS/Godot",
+        "home:Applications/Godot.app/Contents/MacOS/Godot",
+        "studio:tools/Godot.app/Contents/MacOS/Godot"
+      ],
+      "version": { "args": ["--version"], "pattern": "^(4\\.7\\.2)\\.stable", "minimum": "4.7.2" },
+      "install": {
+        "action": "install",
+        "url": "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_macos.universal.zip",
+        "sha256": "c58a24e31d720be9d62f60cb5627c4e695fb72f21b0cfe1bc9ccaa9a3b3ba63e",
+        "bytes": 170622178,
+        "unpackedBytes": 360000000,
+        "format": "zip",
+        "entry": "Godot.app",
+        "executable": "Godot.app/Contents/MacOS/Godot",
+        "notices": []
+      }
+    }
+  ],
+  "nativeDownloads": [
+    {
+      "id": "web-templates",
+      "label": "Godot web export templates",
+      "action": "install-templates",
+      "url": "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz",
+      "sha256": "f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011",
+      "bytes": 1281349702,
+      "unpackedBytes": 21000000,
+      "format": "zip",
+      "members": ["templates/version.txt", "templates/web_nothreads_release.zip", "templates/web_nothreads_debug.zip"]
+    }
+  ],
+  "nativeJobs": [
+    {
+      "id": "check",
+      "runtime": "godot",
+      "args": [
+        "--headless",
+        "--path",
+        { "source": "project", "name": "." },
+        "--script",
+        { "source": "package", "name": "wrapper.gd" },
+        "--",
+        "check",
+        { "source": "output", "name": "report.json" }
+      ],
+      "inputs": [],
+      "values": {},
+      "outputs": ["report.json"],
+      "timeoutMs": 300000,
+      "maxOutputBytes": 64000,
+      "maxAssetBytes": 1048576,
+      "project": {
+        "maxFiles": 20000,
+        "maxBytes": 536870912,
+        "exclude": ["assets/godot", "public/assets/godot", "dist"]
+      }
+    },
+    {
+      "id": "export",
+      "runtime": "godot",
+      "args": [
+        "--headless",
+        "--path",
+        { "source": "project", "name": "." },
+        "--script",
+        { "source": "package", "name": "wrapper.gd" },
+        "--",
+        "export",
+        { "source": "output", "name": "web/index.html" },
+        { "source": "download", "name": "web-templates" },
+        { "source": "value", "name": "preset" }
+      ],
+      "inputs": [],
+      "values": { "preset": { "pattern": "^[A-Za-z0-9 _.-]{0,60}$", "maxLength": 60 } },
+      "outputs": [
+        "web/index.html",
+        "web/index.js",
+        "web/index.wasm",
+        "web/index.pck",
+        "web/index.audio.worklet.js",
+        "web/index.audio.position.worklet.js",
+        "web/index.png",
+        "web/index.icon.png",
+        "web/index.apple-touch-icon.png"
+      ],
+      "osTempFiles": ["tmpproject.binary"],
+      "timeoutMs": 300000,
+      "maxOutputBytes": 64000,
+      "maxAssetBytes": 104857600,
+      "project": {
+        "maxFiles": 20000,
+        "maxBytes": 536870912,
+        "exclude": ["assets/godot", "public/assets/godot", "dist"]
+      }
+    }
+  ]
+}
