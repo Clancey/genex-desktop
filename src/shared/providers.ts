@@ -47,6 +47,7 @@ export const EngineId = {
   Codex: "codex",
   Bonsai: "bonsai",
   Ollama: "ollama",
+  OpenAICompatible: "openai-compatible",
 } as const;
 export type EngineId = (typeof EngineId)[keyof typeof EngineId];
 
@@ -86,6 +87,14 @@ export const PROVIDERS = [
   },
   { id: EngineId.Bonsai, label: "Bonsai", subscription: false, login: "none", roles: "sessions", signIn: null },
   { id: EngineId.Ollama, label: "Ollama", subscription: false, login: "none", roles: "single", signIn: null },
+  {
+    id: EngineId.OpenAICompatible,
+    label: "OpenAI-compatible",
+    subscription: false,
+    login: "none",
+    roles: "single",
+    signIn: null,
+  },
 ] as const satisfies readonly ProviderInfo[];
 
 type Provider = (typeof PROVIDERS)[number];

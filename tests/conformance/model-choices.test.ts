@@ -10,6 +10,7 @@ import {
   unifiedEffort,
 } from "../../src/renderer/model-choices.ts";
 import type { EngineDescriptor } from "../../src/renderer/types.ts";
+import { EngineStatusCode } from "../../src/shared/engine-descriptor.ts";
 const model = (id: string, label = id, efforts = ["low", "medium", "high"], defaultEffort = "medium") => ({
   id,
   label,
@@ -109,6 +110,53 @@ test("picker groups models by who makes them", () => {
     [...new Set(toChoices(engines).map((c) => c.group))],
     ["Local models", "Claude models", "ChatGPT models"],
   );
+});
+test("an OpenAI-compatible endpoint's models sit under their own header, tagged as a server's", () => {
+  const endpoint: EngineDescriptor = {
+    id: "openai-compatible",
+    label: "OpenAI-compatible endpoint",
+    kind: "direct",
+    status: { code: "ready", detail: "2 model(s) at http://gpu-box:1234/v1" },
+    defaultModel: null,
+    models: [model("qwen3-coder-30b"), { ...model("chat-only"), supportsTools: false }],
+  };
+  const choices = toChoices([engines[0]!, endpoint]);
+  assert.deepEqual(
+    choices.map((c) => [c.key, c.group, c.tag, c.disabled]),
+    [
+      ["bonsai::bonsai-pq", "Local models", "local", false],
+      ["openai-compatible::qwen3-coder-30b", "Server models", "server", false],
+      ["openai-compatible::chat-only", "Server models", "no tools", true],
+    ],
+  );
+  const unconfigured = {
+    ...endpoint,
+    models: [],
+    status: { code: EngineStatusCode.NotInstalled, detail: "none set up" },
+  };
+  assert.equal(toChoices([unconfigured]).length, 0, "no endpoint, no row");
+});
+test("a saved endpoint that cannot list its models says why under Server models, instead of vanishing", () => {
+  const failing = (code: EngineStatusCode, remedy: string): EngineDescriptor => ({
+    id: "openai-compatible",
+    label: "OpenAI-compatible endpoint",
+    kind: "direct",
+    status: { code, detail: `failed: ${code}`, remedy },
+    defaultModel: null,
+    models: [],
+  });
+  const rows = [
+    toChoices([failing(EngineStatusCode.NotRunning, "Allow Local Network")]),
+    toChoices([failing(EngineStatusCode.NeedsLogin, "Check the API key")]),
+  ];
+  for (const [index, remedy] of ["Allow Local Network", "Check the API key"].entries()) {
+    const only = rows[index]!;
+    assert.equal(only.length, 1);
+    assert.equal(only[0]!.group, "Server models");
+    assert.equal(only[0]!.disabled, true, "nothing to run on until it lists models");
+    assert.match(only[0]!.title ?? "", new RegExp(remedy));
+  }
+  assert.notEqual(rows[0]![0]!.tag, rows[1]![0]!.tag, "an unreachable server and a refused key read differently");
 });
 test("one effort serves every role at the closest level each model accepts", () => {
   const choices = toChoices(engines),

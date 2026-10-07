@@ -32,6 +32,34 @@ nor starts one. A pull that finds nothing answering there fails as `Unavailable`
 named, not as the fetch's bare error, and its row then offers Install Ollama beside Download: the
 platform's page on ollama.com. The person installs and starts Ollama, then downloads again.
 
+## A server on another computer
+
+Settings → Local Models → Models on another computer saves one OpenAI-compatible endpoint (LM
+Studio, vLLM, llama.cpp `llama-server`, Ollama on another machine and the like) as the direct
+engine `openai-compatible`. The address must be `http` or `https` with no credentials, query or
+fragment; trailing slashes are trimmed and a bare host gets `/v1`. Main keeps it in
+`userData/openai-endpoint.json`; the optional API key goes only to the OS secret store (refused,
+saving nothing, while it is locked) and is redacted from logs. The renderer learns only whether a
+key is saved. Removing the server deletes both.
+
+Saving lists `GET {address}/models` at once and says how many models it found or why it could not
+(no answer, key refused, HTTP status). A host with no route (`EHOSTUNREACH`/`ENETUNREACH`) is
+named apart from a silent server. On macOS that is usually Local Network privacy: the first LAN
+connection raises the system prompt (which can open behind other windows), and the app is not
+listed in System Settings → Privacy & Security → Local Network until it is answered. So a save
+re-asks every 2 seconds for up to a minute while the card asks for Allow; the remedy covers a
+Don't Allow. The packaged app declares `NSLocalNetworkUsageDescription`; stock Electron is never
+prompted, so `npm start` on macOS runs an ad-hoc signed copy in `.studio-dev/electron` carrying
+Genex's bundle id and usage text, which shares Genex's permission. The listing is cached for 15 seconds, times out after 10,
+refuses redirects and sends `Authorization: Bearer` only when a key is saved. Embedding and
+reranker entries are skipped. Each listed model gets the first context length the server reports
+(`loaded_context_length`, `context_length`, `max_model_len`, `context_window`, llama.cpp's
+`meta.n_ctx`…), else an 8,192-token estimate marked unknown. Tools are assumed unless the entry
+lists capabilities without them; images and thinking require a reported capability. The models
+appear in the picker under Server models; a model without tools is listed disabled. Chats use
+`POST {address}/chat/completions` through the same streaming client as Ollama and are compacted by
+Studio, like Ollama's. Fixture profiles do not register this engine.
+
 Settings → Local Models downloads Bonsai weights and the Q8 vision projector directly from pinned
 Prism ML Hugging Face revisions, plus the pinned Prism llama.cpp macOS arm64 release.
 Stock Ollama cannot run these Bonsai 2 packs. Ollama remains independently available.

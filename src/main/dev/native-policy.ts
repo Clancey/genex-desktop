@@ -41,6 +41,8 @@ const NATIVE_CHANNELS = [
   "studio:models.lookup",
   // Delete removes model files from this Mac, or asks the person's own Ollama to delete one.
   "studio:models.remove",
+  // Saving the endpoint writes its key to the OS secret store and lists the server's /models.
+  "studio:openai-endpoint.save",
   // Install fetches the vendor's installer and runs it as the person: a download and a real install.
   "studio:cli-install.start",
   "studio:models.refresh",
@@ -148,6 +150,8 @@ const FIXTURE_SAFE = [
   "studio:game.assets",
   "studio:game.asset.still",
   "studio:engines",
+  // The saved endpoint address and whether a key is saved: a read of the profile's own settings.
+  "studio:openai-endpoint.get",
   "studio:engines.recheck",
   "studio:hardware",
   "studio:model-install.status",

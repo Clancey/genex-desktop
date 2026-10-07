@@ -23,7 +23,13 @@ const {
   trimNodePty,
   trimSandboxVendor,
 } = require("./scripts/package-prune.cjs");
-const { APP_BUNDLE_ID, localSigningHook, macSigning, windowsSigning } = require("./scripts/package-signing.cjs");
+const {
+  APP_BUNDLE_ID,
+  LOCAL_NETWORK_USAGE,
+  localSigningHook,
+  macSigning,
+  windowsSigning,
+} = require("./scripts/package-signing.cjs");
 const { version } = require("./package.json");
 
 const PRODUCT_NAME = "Genex";
@@ -106,6 +112,8 @@ module.exports = {
       NSDesktopFolderUsageDescription: folderAccess("your Desktop"),
       NSDownloadsFolderUsageDescription: folderAccess("your Downloads folder"),
       NSRemovableVolumesUsageDescription: folderAccess("folders on an external drive"),
+      // An OpenAI-compatible model server is usually another computer on the LAN; macOS asks first.
+      NSLocalNetworkUsageDescription: LOCAL_NETWORK_USAGE,
     },
     // The Windows executable's version resource: what Explorer, Task Manager and UAC show.
     win32metadata: {

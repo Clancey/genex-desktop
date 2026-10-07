@@ -135,6 +135,7 @@ const FIELDS = [
   "mainThread",
   "mcp",
   "ollamaSidecar",
+  "openaiEndpoint",
   "options",
   "pluginServices",
   "plugins",

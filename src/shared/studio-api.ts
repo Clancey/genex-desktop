@@ -489,6 +489,12 @@ export interface StudioApi {
   cancelModelDownload(): Promise<boolean>;
   /** Delete a downloaded local model (Bonsai or Ollama) from this Mac. */
   removeModel(model: string): Promise<boolean>;
+  /** The OpenAI-compatible endpoint saved in Settings (never its API key, only whether one is saved). */
+  openAIEndpoint(): Promise<import("./openai-endpoint.ts").OpenAIEndpointView>;
+  /** Save or remove the endpoint, then list its `/models`; the endpoint saves even when it does not answer. */
+  saveOpenAIEndpoint(
+    update: import("./openai-endpoint.ts").OpenAIEndpointUpdate,
+  ): Promise<import("./openai-endpoint.ts").OpenAIEndpointSaveResult>;
   revealProject(project: string, file?: string): Promise<boolean>;
   /** A file the chat names, from that chat's game folder or its run's unlanded build. */
   readGameFile(threadId: string, path: string): Promise<GameFile>;

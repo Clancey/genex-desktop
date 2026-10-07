@@ -8,9 +8,9 @@ export interface CompactControl {
 }
 
 /**
- * Compact now for the chat's model: offered when its chat can be compacted — a local Ollama chat
- * (its log is summarised) or an engine that keeps a session (the session writes its handover and
- * the next turn starts fresh). Disabled while it runs and while a turn or a build is under way.
+ * Compact now for the chat's model: offered when its chat can be compacted — an Ollama or
+ * OpenAI-compatible endpoint chat (its log is summarised) or an engine that keeps a session (the
+ * session writes its handover and the next turn starts fresh). Disabled while it runs and while a turn or a build is under way.
  */
 export function compactControl({
   engine,
@@ -23,7 +23,12 @@ export function compactControl({
   compacting: boolean;
   busy: boolean;
 }): CompactControl {
-  return { shown: engine === EngineId.Ollama || supportsSessions === true, disabled: compacting || busy };
+  return { shown: isStudioCompacted(engine) || supportsSessions === true, disabled: compacting || busy };
+}
+
+/** Engines whose chat log the studio summarises itself rather than a provider session. */
+function isStudioCompacted(engine: string | null | undefined): boolean {
+  return engine === EngineId.Ollama || engine === EngineId.OpenAICompatible;
 }
 
 /** Compact now for the composer's selected model, as its context panel and its /compact read it. */

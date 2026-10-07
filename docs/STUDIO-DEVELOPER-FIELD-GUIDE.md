@@ -63,7 +63,9 @@ separate native game view.
 ## Normal profile and packaged app
 
 `npm start` rebuilds and launches the normal profile, with your own games and accounts (agents
-use it only when asked). Quit any running instance first. Closing a window may leave the process
+use it only when asked). On macOS it runs a copy of Electron with Genex's bundle id
+(`.studio-dev/electron`, rebuilt when Electron changes) so Local Network permission applies to
+LAN model servers. Quit any running instance first. Closing a window may leave the process
 alive. `open` can focus an existing process and is not proof of a fresh launch.
 
 ```sh

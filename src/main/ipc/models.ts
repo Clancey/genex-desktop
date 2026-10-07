@@ -5,6 +5,7 @@ import { type ModelPullProgress, UiEvent } from "../../shared/ui-events.ts";
 import type { ProviderUsageReport } from "../../shared/provider-usage.ts";
 import { isBonsaiModelId } from "../../substrate/bonsai/manifest.ts";
 import { BonsaiEngine } from "../../substrate/engines/bonsai.ts";
+import { OpenAICompatibleEngine } from "../../substrate/engines/openai-compatible.ts";
 import { detectHardware, fitFor } from "../../substrate/hardware.ts";
 import { lookupOllamaModel } from "../../substrate/ollama-registry.ts";
 import { hardwareReport } from "../core/hardware-report.ts";
@@ -13,6 +14,7 @@ import type { IpcHandle } from "./registrar.ts";
 import { errorMessage } from "../../shared/errors.ts";
 import { EngineId } from "../../shared/providers.ts";
 import { EngineStatusCode } from "../../shared/engine-descriptor.ts";
+import type { OpenAIEndpointSaveResult, OpenAIEndpointView } from "../../shared/openai-endpoint.ts";
 
 /** Why a local model request from the renderer is refused. */
 const MESSAGE = {
@@ -22,7 +24,7 @@ const MESSAGE = {
 } as const;
 
 export interface ModelsIpcDeps {
-  core: Pick<StudioCore, "engines">;
+  core: Pick<StudioCore, "engines" | "openaiEndpoint">;
   subscription(id: string): SubscriptionEngine | null;
   pushUiEvent(event: UiEvent): void;
 }
@@ -48,6 +50,11 @@ export function registerModelsIpc(handle: IpcHandle, { core, subscription, pushU
     return reports.filter((report): report is ProviderUsageReport => report !== null);
   });
   handle("studio:hardware", async () => hardwareReport());
+  handle("studio:openai-endpoint.get", async () => core.openaiEndpoint.view());
+  handle("studio:openai-endpoint.save", async (payload) => {
+    const endpoint = await core.openaiEndpoint.save(payload);
+    return probeEndpoint(core, endpoint);
+  });
   handle("studio:engines.recheck", async (payload) => {
     for (const id of payload?.engine ? [payload.engine] : SUBSCRIPTION_ENGINES) {
       const engine = subscription(id);
@@ -116,4 +123,25 @@ export function registerModelsIpc(handle: IpcHandle, { core, subscription, pushU
     }
     return true;
   });
+}
+
+/**
+ * Ask the just-saved endpoint for its `/models`, so Settings can say at once whether it answers.
+ * On macOS this first LAN connection is what raises the Local Network prompt; the engine waits for
+ * the answer so choosing Allow finishes this save.
+ */
+async function probeEndpoint(
+  core: Pick<StudioCore, "engines">,
+  endpoint: OpenAIEndpointView,
+): Promise<OpenAIEndpointSaveResult> {
+  if (!endpoint.baseUrl || !core.engines.has(EngineId.OpenAICompatible)) {
+    return { endpoint, modelCount: null, error: null, remedy: null };
+  }
+  const engine = core.engines.get(EngineId.OpenAICompatible);
+  if (engine instanceof OpenAICompatibleEngine) await engine.refreshForSave();
+  else await engine.refreshModels?.(true);
+  const status = await engine.status();
+  const listed = status.code === EngineStatusCode.Ready || status.code === EngineStatusCode.NotInstalled;
+  if (!listed) return { endpoint, modelCount: null, error: status.detail, remedy: status.remedy ?? null };
+  return { endpoint, modelCount: (await engine.models()).length, error: null, remedy: null };
 }

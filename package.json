@@ -17,7 +17,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "watch": "node scripts/build.mjs --watch",
-    "start": "node scripts/build.mjs && electron .",
+    "start": "node scripts/build.mjs && node scripts/start.mjs",
     "typecheck": "node scripts/check-node.mjs && node scripts/tsc.ts --noEmit",
     "lint": "biome check --diagnostic-level=error .",
     "lint:warn": "biome lint --reporter=summary .",
