@@ -26,6 +26,8 @@ const path = require("node:path");
  * installed copy's macOS permissions and Keychain access (docs/release-readiness.md).
  */
 const APP_BUNDLE_ID = "games.genex.desktop";
+/** Why macOS's Local Network prompt appears: an OpenAI-compatible model server is usually on the LAN. */
+const LOCAL_NETWORK_USAGE = "Genex connects to the model server you add in Settings → Local Models.";
 /** Bundle ids with this prefix are placeholders that a Developer ID build refuses. */
 const PLACEHOLDER_BUNDLE_PREFIX = "local.";
 /** The hardened-runtime entitlements for the app and its helpers. */
@@ -155,4 +157,12 @@ function windowsSigning(env) {
   };
 }
 
-module.exports = { APP_BUNDLE_ID, ENTITLEMENTS, adHocSign, localSigningHook, macSigning, windowsSigning };
+module.exports = {
+  APP_BUNDLE_ID,
+  ENTITLEMENTS,
+  LOCAL_NETWORK_USAGE,
+  adHocSign,
+  localSigningHook,
+  macSigning,
+  windowsSigning,
+};
