@@ -3,7 +3,7 @@ import { ModelCatalogState } from "../shared/model-catalog.ts";
  * The model picker's rows: every engine's models as choices keyed `engine::model`, and the
  * effort each role runs at once a model is picked.
  */
-import { EngineKind, isEngineReady, needsSignIn } from "../shared/engine-descriptor.ts";
+import { EngineKind, EngineStatusCode, isEngineReady, needsSignIn } from "../shared/engine-descriptor.ts";
 import { ReasoningEffort } from "../shared/model-preferences.ts";
 import { resolveRoles } from "../shared/model-roles.ts";
 import { EngineId } from "../shared/providers.ts";
@@ -54,10 +54,38 @@ export function toChoices(engines: EngineDescriptor[], picker: PickerChoices = {
 
 function engineChoices(engine: EngineDescriptor, picker: PickerChoices[string] | undefined): ModelChoice[] {
   const ready = isEngineReady(engine);
-  if (engine.kind === EngineKind.Direct) return ready ? engine.models.map((model) => localChoice(engine, model)) : [];
+  if (engine.kind === EngineKind.Direct)
+    return ready ? engine.models.map((model) => localChoice(engine, model)) : failingServer(engine);
   const models = subscriptionModelChoices(engine, picker);
   if (models.length > 0) return models;
   return [subscriptionRow(engine, ready)];
+}
+
+/** Why a saved endpoint lists nothing, by its status; absent when it is simply not set up. */
+const SERVER_FAILURE_TAG: Partial<Record<EngineStatusCode, string>> = {
+  [EngineStatusCode.NotRunning]: MODEL_PICKER_WORDS.serverUnreachable,
+  [EngineStatusCode.NeedsLogin]: MODEL_PICKER_WORDS.serverKey,
+  [EngineStatusCode.Error]: MODEL_PICKER_WORDS.serverError,
+};
+
+/**
+ * A saved OpenAI-compatible server that cannot list its models: one disabled row under its own
+ * header that says why, so the person learns the server is the problem rather than seeing nothing.
+ */
+function failingServer(engine: EngineDescriptor): ModelChoice[] {
+  const tag = engine.id === EngineId.OpenAICompatible ? SERVER_FAILURE_TAG[engine.status.code] : undefined;
+  if (!tag) return [];
+  const reason = [engine.status.detail, engine.status.remedy].filter(Boolean).join(" — ");
+  return [
+    {
+      key: modelKey(engine.id, ""),
+      name: engine.label,
+      group: groupLabel(engine),
+      tag,
+      disabled: true,
+      title: reason,
+    },
+  ];
 }
 
 function localTag(engine: EngineDescriptor, model: EngineModel): string {

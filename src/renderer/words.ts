@@ -1380,6 +1380,10 @@ export const MODEL_PICKER_WORDS = {
   local: "local",
   localStale: "local · stale",
   server: "server",
+  /** A saved server that did not answer, or refused the key: its one row says which. */
+  serverUnreachable: "can't reach",
+  serverKey: "check key",
+  serverError: "error",
   noTools: "no tools",
   cannotCallTools: "This model cannot call tools, so it cannot build",
   subscription: "subscription",
